@@ -3,13 +3,17 @@
 **Written**: 2026-07-29
 **Last verified green**: 2026-07-29 — `cargo test` 24 unit + 16
 integration = 40/0/0; `cargo fmt --check` clean;
-`cargo clippy --all-targets -- -D warnings` clean; `cargo audit`
-clean; `mdbook build book` clean; container smoke-tested locally
-against sample DSLs.
-**Branch**: `dev` — initial commit, not yet pushed to a GitHub
-remote.
-**Release**: `v0.1.0-rc.1` — tagged locally, not yet pushed. See
-"Publishing setup" below.
+`cargo clippy --all-targets -- -D warnings` clean; `cargo audit
+--deny warnings` clean (200 crate deps); `cargo deny check all`
+clean; `mdbook build book` clean (mdbook 0.4.40 + linkcheck 0.7.7);
+container image built + smoke-tested locally (healthz, samples/ping,
+samples/echo, samples/arrays/map_products, 404, path-traversal 400,
+405 on POST /healthz — all as expected).
+**Branch**: `dev` — one commit (`7a9d3fd`), not yet pushed to a
+GitHub remote (the repo does not yet exist).
+**Release**: `v0.1.0-rc.1` — NOT yet tagged locally. Cut the tag as
+step 8 in "Hand-off — publishing setup" below, once the GitHub repo
+exists and the first CI push has gone green.
 
 Next contributor (human or Claude) must:
 
