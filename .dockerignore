@@ -1,0 +1,15 @@
+target/
+target-local/
+book/book/
+.git/
+.github/
+.claude/
+.idea/
+.vscode/
+tests/
+docs/
+examples/
+tasks/
+*.log
+.env
+.env.local

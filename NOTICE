@@ -1,0 +1,9 @@
+DataMapper-on-Rust
+Copyright 2026 Rainer Türner
+
+Rust re-implementation of DataMapper
+(https://github.com/Buerostack/DataMapper), originally developed
+inside the Information System Authority of Estonia (RIA) from
+June 2018 and led by Rainer Türner until April 2025.
+
+Licensed under the Apache License, Version 2.0.

@@ -1,0 +1,43 @@
+# Production-hardened compose file for DataMapper-on-Rust.
+# See STANDARDS.md §9 for the security posture rationale.
+services:
+  datamapper-on-rust:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: datamapper-on-rust:0.1.0-rc.1
+    container_name: datamapper-on-rust
+    ports:
+      - "3000:3000"
+    # The image ships datamapper.yaml + DSL/ baked in as the demo.
+    # Override either with bind mounts:
+    #
+    # volumes:
+    #   - ./datamapper.yaml:/app/datamapper.yaml:ro
+    #   - ./DSL:/app/DSL:ro                     # your own templates
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+    # DataMapper never writes to disk at runtime (config + templates
+    # are read-only inputs; response bodies are streamed out over
+    # HTTP). Safe to lock the root filesystem read-only.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 512M
+        reservations:
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

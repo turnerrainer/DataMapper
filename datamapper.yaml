@@ -1,0 +1,30 @@
+# DataMapper-on-Rust default runtime config.
+#
+# This file ships with the container image at /app/datamapper.yaml.
+# Bind-mount to override at deploy time; see docker-compose.yml.
+#
+# Full reference: book/src/configuration.md
+# (published: https://buerostack.github.io/DataMapper-on-Rust/configuration.html)
+
+# TCP port the HTTP server binds on 0.0.0.0.
+port: 3000
+
+# Root directory scanned for Handlebars templates. Each file
+# `<dsl_path>/<project>/<view>.hbs` becomes route
+# `POST /<project>/<view>`.
+dsl_path: ./DSL
+
+# Resource ceilings. Overrun surfaces as a structured 413 (inbound
+# body cap) or 504 (request timeout).
+limits:
+  # Inbound JSON body cap. Overflow → 413 with JSON error body.
+  # DataMapper payloads are typically single-digit KB; 2 MiB is a
+  # conservative headroom.
+  max_request_bytes: 2097152      # 2 MiB
+  # Rendered template output cap. Overflow → 500 with JSON error
+  # body. Guards against pathological templates that expand a
+  # small input into gigabytes of output.
+  max_response_bytes: 16777216    # 16 MiB
+  # Wall-clock ceiling for a single render call. Guards against
+  # runaway helper recursion or extreme template complexity.
+  request_timeout_secs: 30

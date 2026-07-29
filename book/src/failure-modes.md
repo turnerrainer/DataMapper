@@ -1,0 +1,48 @@
+# Failure modes
+
+Every failure DataMapper can surface, in one table. The `error`
+field in the JSON body is the stable machine identifier;
+`message` is a human string and may change between versions.
+
+## Error codes
+
+| HTTP status | `error` code | Cause | What to do |
+|---|---|---|---|
+| 400 | `InvalidJson` | Request body was not valid JSON. | Fix the client. Empty body is allowed and treated as `{}`. |
+| 400 | `InvalidPath` | Route contained `..`, an absolute prefix, a null byte, or an empty segment. | Fix the client. Segments must be plain names. |
+| 404 | `TemplateNotFound` | No file at either candidate path. Body includes `tried: [<paths>]`. | Confirm the template exists at `DSL/<project>/<view>.hbs` or `DSL/<project>/hbs/<view>.hbs`. |
+| 405 | `MethodNotAllowed` | POST on `/healthz` or `/health`, or non-POST on `/<project>/*`. | Use `GET`/`HEAD` for health, `POST` for template routes. |
+| 413 | `RequestTooLarge` | Body exceeded `limits.max_request_bytes`. Body includes `limit: <bytes>`. | Shrink the payload or raise the cap in `datamapper.yaml`. |
+| 500 | `TemplateRenderError` | Handlebars failed to render. Body includes `view: <path>`. | Fix the template. Common causes: missing helper, typo in a `{{#if}}` block. |
+| 500 | `ResponseTooLarge` | Rendered output exceeded `limits.max_response_bytes`. Body includes `limit: <bytes>`. | Fix the template (template amplification) or raise the cap. |
+| 500 | `Internal` | Unexpected server-side error — I/O reading the template, config parse failure at startup, etc. | Check server logs (`RUST_LOG=debug` for detail). |
+
+## Response body shape
+
+Every error response is JSON:
+
+```json
+{
+  "error": "TemplateNotFound",
+  "message": "template not found: tried [\"myproj/greet.hbs\", \"myproj/hbs/greet.hbs\"]",
+  "tried": ["myproj/greet.hbs", "myproj/hbs/greet.hbs"]
+}
+```
+
+Extra fields present depending on the variant:
+- `tried: [<paths>]` — on `TemplateNotFound`.
+- `limit: <bytes>` — on `RequestTooLarge` / `ResponseTooLarge`.
+- `view: <path>` — on `TemplateRenderError`.
+
+## What DataMapper deliberately does NOT do on failure
+
+- **Retry.** DataMapper is stateless and idempotent — retry policy
+  is a client concern.
+- **Fall back to a different template.** The two-candidate lookup
+  (`<view>.hbs` → `hbs/<view>.hbs`) is the only fallback; no
+  "closest match" or "template hierarchy" beyond that.
+- **Cache errored templates.** A fix to the template file is
+  picked up on the next request (per-request read).
+- **Emit stack traces or internal file paths** in error responses.
+  Log detail lives in the server log (`RUST_LOG`), not the wire
+  response.
