@@ -1,19 +1,21 @@
 # HANDOFF
 
 **Written**: 2026-07-29
-**Last verified green**: 2026-07-29 — `cargo test` 24 unit + 16
-integration = 40/0/0; `cargo fmt --check` clean;
-`cargo clippy --all-targets -- -D warnings` clean; `cargo audit
---deny warnings` clean (200 crate deps); `cargo deny check all`
-clean; `mdbook build book` clean (mdbook 0.4.40 + linkcheck 0.7.7);
-container image built + smoke-tested locally (healthz, samples/ping,
-samples/echo, samples/arrays/map_products, 404, path-traversal 400,
-405 on POST /healthz — all as expected).
-**Branch**: `dev` — one commit (`7a9d3fd`), not yet pushed to a
-GitHub remote (the repo does not yet exist).
-**Release**: `v0.1.0-alpha.1` — NOT yet tagged locally. Cut the tag as
-step 8 in "Hand-off — publishing setup" below, once the GitHub repo
-exists and the first CI push has gone green.
+**Last verified green**: 2026-07-31 — `v0.1.0-alpha.1` published.
+Local verification set clean: `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`
+(24 unit + 16 integration = 40/0/0), `cargo audit --deny warnings`,
+`cargo deny check all`, `mdbook build book` (mdbook 0.4.40 +
+linkcheck 0.7.7). Remote `tests`, `security`, `docs` CI green on
+`dev`. `publish.yml` green on tag push: multi-arch build (amd64 +
+arm64), Trivy scan clean, per-arch `/healthz` smoke passed, cosign
+keyless signatures on both registries. Fresh unauthenticated
+`docker pull` + `/healthz` + `samples/ping` verified on both
+`docker.io/turnerrainer/datamapper:0.1.0-alpha.1` and
+`ghcr.io/turnerrainer/datamapper:0.1.0-alpha.1`.
+**Branch**: `dev` — pushed to `origin` at
+<https://github.com/turnerrainer/datamapper>.
+**Release**: `v0.1.0-alpha.1` — tagged, pushed, published.
 
 Next contributor (human or Claude) must:
 
@@ -78,14 +80,11 @@ Open (`tasks/backlog/`):
 | 004 | Optional per-DSL JSON-schema validation |
 | 005 | Helper library expansion (uppercase, fmt_date, default, …) |
 
-## Hand-off — publishing setup (I stopped here)
+## Hand-off — publishing setup
 
-The four GitHub Actions workflows are in place. Everything below
-needs the operator's credentials / one-time console clicks and is
-NOT automated — DEV-REQUIREMENTS §9.1 gates these on human review.
-
-Run these in order the first time; subsequent releases are just
-`git push origin vX.Y.Z`.
+**Status: completed 2026-07-31.** The steps below are preserved as
+runbook for future releases. Subsequent releases are typically just
+`git push origin vX.Y.Z` — CI does the rest.
 
 1. **Create the GitHub repo:**
    ```bash
@@ -139,13 +138,14 @@ Run these in order the first time; subsequent releases are just
    arch smoke test → cosign sign both registries. Watch the
    Actions tab to green.
 
-9. **After first publish, link the auto-created GHCR package**
-   back to the repo at
-   <https://github.com/users/turnerrainer/packages/container/datamapper/settings>
-   → **Change visibility** to **Public** if desired → **Manage
-   Actions access** → link `turnerrainer/datamapper` with
-   **Write** role. (Without this, subsequent `GITHUB_TOKEN`
-   pushes to GHCR fail with a permissions error.)
+9. **After first publish, review the auto-created GHCR package**
+   at
+   <https://github.com/users/turnerrainer/packages/container/datamapper/settings>.
+   For a package pushed under a public user-owned repo, GHCR
+   inherits **public** visibility automatically and repo access
+   is already linked — no manual step needed for the initial
+   release. Only revisit this if the repo is switched to private,
+   or if the org later moves off `turnerrainer`.
 
 10. **Verify from a fresh machine:**
     ```bash
@@ -166,7 +166,7 @@ Run these in order the first time; subsequent releases are just
 | Cross-project ruleset (authoritative) | [`../DEV-REQUIREMENTS.md`](../DEV-REQUIREMENTS.md) |
 | Domain design (DataMapper-specific) | [`./docs/DESIGN.md`](./docs/DESIGN.md) |
 | Project-specific standards addendum | [`./STANDARDS.md`](./STANDARDS.md) |
-| Public docs | https://turnerrainer.github.io/datamapper/ (after first push) |
+| Public docs | https://turnerrainer.github.io/datamapper/ |
 | Full change history | [`./CHANGELOG.md`](./CHANGELOG.md) |
 | Private security disclosure | [`./SECURITY.md`](./SECURITY.md) |
 | CI workflows | [`.github/workflows/`](./.github/workflows/) |
