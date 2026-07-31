@@ -223,8 +223,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "datamapper-on-rust"
-version = "0.1.0-rc.1"
+name = "datamapper"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "axum",

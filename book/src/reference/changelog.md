@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.1] - 2026-07-29
+## [0.1.0-alpha.1] - 2026-07-29
 
 ### Added
 - Initial Rust re-implementation of DataMapper, targeting DEV-REQUIREMENTS
@@ -45,5 +45,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   004 (JSON-schema validation), 005 (helper expansion) filed.
 - 24 unit + 16 integration tests, all green.
 
-[Unreleased]: https://github.com/Buerostack/DataMapper-on-Rust/compare/v0.1.0-rc.1...HEAD
-[0.1.0-rc.1]: https://github.com/Buerostack/DataMapper-on-Rust/releases/tag/v0.1.0-rc.1
+[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.1.0-alpha.1...HEAD
+[0.1.0-alpha.1]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.1

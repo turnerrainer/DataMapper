@@ -1,12 +1,12 @@
 # Introduction
 
-**DataMapper-on-Rust** turns a folder of Handlebars templates into a
+**DataMapper** turns a folder of Handlebars templates into a
 REST API. Drop a file at `DSL/samples/ping.hbs` → it answers
 `POST /samples/ping`. Send a JSON body → get the rendered output
 back as JSON (or HTML, if that's what the template produces).
 
-**Version:** 0.1.0-rc.1 · **License:** Apache-2.0
-· **Source:** [github.com/Buerostack/DataMapper-on-Rust](https://github.com/Buerostack/DataMapper-on-Rust)
+**Version:** 0.1.0-alpha.1 · **License:** Apache-2.0
+· **Source:** [github.com/turnerrainer/datamapper](https://github.com/turnerrainer/datamapper)
 
 ## What DataMapper is for
 
@@ -31,14 +31,14 @@ release.
 - **Arbitrary code execution.** Handlebars is declarative on
   purpose.
 
-See [`docs/DESIGN.md`](https://github.com/Buerostack/DataMapper-on-Rust/blob/dev/docs/DESIGN.md)
+See [`docs/DESIGN.md`](https://github.com/turnerrainer/datamapper/blob/dev/docs/DESIGN.md)
 for the full non-goals list.
 
 ## One-command demo
 
 ```bash
 docker run -d --name datamapper -p 3000:3000 \
-  buerostack/datamapper-on-rust:rc
+  turnerrainer/datamapper:alpha
 
 curl -sS -X POST http://localhost:3000/samples/ping \
   -H 'content-type: application/json' \

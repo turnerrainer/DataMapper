@@ -1,12 +1,12 @@
-# Production-hardened compose file for DataMapper-on-Rust.
+# Production-hardened compose file for DataMapper.
 # See STANDARDS.md §9 for the security posture rationale.
 services:
-  datamapper-on-rust:
+  datamapper:
     build:
       context: .
       dockerfile: Dockerfile
-    image: datamapper-on-rust:0.1.0-rc.1
-    container_name: datamapper-on-rust
+    image: datamapper:0.1.0-alpha.1
+    container_name: datamapper
     ports:
       - "3000:3000"
     # The image ships datamapper.yaml + DSL/ baked in as the demo.

@@ -37,7 +37,7 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: build
-        run: cargo build --release --bin datamapper-on-rust
+        run: cargo build --release --bin datamapper
       - name: cargo test
         run: cargo test --release --no-fail-fast
 

@@ -1,4 +1,4 @@
-//! DataMapper-on-Rust — library root.
+//! DataMapper — library root.
 //!
 //! Public modules used by both `main.rs` (the binary entrypoint) and
 //! `tests/it_end_to_end.rs` (integration tests spinning up a full

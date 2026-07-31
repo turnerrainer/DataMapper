@@ -1,10 +1,10 @@
-# DataMapper-on-Rust — Domain design
+# DataMapper — Domain design
 
 **Written**: 2026-07-29
 **Author**: Rainer Türner
 **Status**: authoritative for v0.1.x
 
-This document defines what DataMapper-on-Rust must do, why it exists,
+This document defines what DataMapper must do, why it exists,
 and what is explicitly out of scope. Task 001 (`tasks/done/001-domain-deep-dive.md`)
 tracks its landing.
 

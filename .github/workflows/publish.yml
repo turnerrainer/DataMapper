@@ -63,22 +63,22 @@ jobs:
             SUFFIX="${VERSION#*-}"
             SUFFIX_TYPE="${SUFFIX%%.*}"
             TAG_LINES=$(cat <<END
-          ghcr.io/buerostack/datamapper-on-rust:$VERSION
-          ghcr.io/buerostack/datamapper-on-rust:$SUFFIX_TYPE
-          docker.io/buerostack/datamapper-on-rust:$VERSION
-          docker.io/buerostack/datamapper-on-rust:$SUFFIX_TYPE
+          ghcr.io/turnerrainer/datamapper:$VERSION
+          ghcr.io/turnerrainer/datamapper:$SUFFIX_TYPE
+          docker.io/turnerrainer/datamapper:$VERSION
+          docker.io/turnerrainer/datamapper:$SUFFIX_TYPE
           END
           )
           else
             PRERELEASE=false
             MAJOR_MINOR="${VERSION%.*}"
             TAG_LINES=$(cat <<END
-          ghcr.io/buerostack/datamapper-on-rust:$VERSION
-          ghcr.io/buerostack/datamapper-on-rust:$MAJOR_MINOR
-          ghcr.io/buerostack/datamapper-on-rust:latest
-          docker.io/buerostack/datamapper-on-rust:$VERSION
-          docker.io/buerostack/datamapper-on-rust:$MAJOR_MINOR
-          docker.io/buerostack/datamapper-on-rust:latest
+          ghcr.io/turnerrainer/datamapper:$VERSION
+          ghcr.io/turnerrainer/datamapper:$MAJOR_MINOR
+          ghcr.io/turnerrainer/datamapper:latest
+          docker.io/turnerrainer/datamapper:$VERSION
+          docker.io/turnerrainer/datamapper:$MAJOR_MINOR
+          docker.io/turnerrainer/datamapper:latest
           END
           )
           fi
@@ -146,7 +146,7 @@ jobs:
       - name: Trivy vulnerability scan (linux/amd64 layer)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: docker.io/buerostack/datamapper-on-rust@${{ steps.build.outputs.digest }}
+          image-ref: docker.io/turnerrainer/datamapper@${{ steps.build.outputs.digest }}
           format: table
           exit-code: '1'
           severity: HIGH,CRITICAL
@@ -159,7 +159,7 @@ jobs:
       # between iterations and pull explicitly with --platform.
       - name: Smoke test — /healthz on both arches
         env:
-          IMAGE: docker.io/buerostack/datamapper-on-rust@${{ steps.build.outputs.digest }}
+          IMAGE: docker.io/turnerrainer/datamapper@${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           for platform in linux/amd64 linux/arm64; do
@@ -201,8 +201,8 @@ jobs:
         run: |
           set -euo pipefail
           for registry_image in \
-              ghcr.io/buerostack/datamapper-on-rust \
-              docker.io/buerostack/datamapper-on-rust
+              ghcr.io/turnerrainer/datamapper \
+              docker.io/turnerrainer/datamapper
           do
             echo "Signing ${registry_image}@${DIGEST}"
             cosign sign --yes "${registry_image}@${DIGEST}"

@@ -1,12 +1,12 @@
 [package]
-name = "datamapper-on-rust"
-version = "0.1.0-rc.1"
+name = "datamapper"
+version = "0.1.0-alpha.1"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Rainer Türner"]
 license = "Apache-2.0"
-description = "DataMapper — Rust implementation. Handlebars template folder → REST endpoint proxy."
-repository = "https://github.com/Buerostack/DataMapper-on-Rust"
+description = "DataMapper — Handlebars template folder → REST endpoint proxy."
+repository = "https://github.com/turnerrainer/datamapper"
 
 [dependencies]
 # Web framework + async runtime
@@ -37,11 +37,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tempfile = "3"
 
 [[bin]]
-name = "datamapper-on-rust"
+name = "datamapper"
 path = "src/main.rs"
 
 [lib]
-name = "datamapper_on_rust"
+name = "datamapper"
 path = "src/lib.rs"
 
 # Clippy posture — `cargo clippy --all-targets -- -D warnings` is the CI gate.

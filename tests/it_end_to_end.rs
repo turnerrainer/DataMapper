@@ -5,7 +5,7 @@
 //! surface with a real reqwest client. No mocking of the renderer,
 //! router, config, or filesystem — DEV-REQUIREMENTS §3.
 
-use datamapper_on_rust::{
+use datamapper::{
     renderer::Renderer,
     router::{self, AppState},
 };

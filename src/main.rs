@@ -1,11 +1,11 @@
-//! DataMapper-on-Rust entry point.
+//! DataMapper entry point.
 //!
 //! Assembles: config → renderer → axum router → server. Binds on
 //! `0.0.0.0:<config.port>`.
 
 use std::sync::Arc;
 
-use datamapper_on_rust::{
+use datamapper::{
     config::AppConfig,
     renderer::Renderer,
     router::{self, AppState},
@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let version = env!("CARGO_PKG_VERSION");
-    tracing::info!("datamapper-on-rust v{} starting", version);
+    tracing::info!("datamapper v{} starting", version);
 
     let (cfg, cfg_source) = AppConfig::load_or_default()?;
     match cfg_source {

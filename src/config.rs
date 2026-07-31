@@ -1,4 +1,4 @@
-//! DataMapper-on-Rust configuration.
+//! DataMapper configuration.
 //!
 //! Wire shape (`datamapper.yaml`):
 //!

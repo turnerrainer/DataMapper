@@ -11,7 +11,7 @@ samples/echo, samples/arrays/map_products, 404, path-traversal 400,
 405 on POST /healthz — all as expected).
 **Branch**: `dev` — one commit (`7a9d3fd`), not yet pushed to a
 GitHub remote (the repo does not yet exist).
-**Release**: `v0.1.0-rc.1` — NOT yet tagged locally. Cut the tag as
+**Release**: `v0.1.0-alpha.1` — NOT yet tagged locally. Cut the tag as
 step 8 in "Hand-off — publishing setup" below, once the GitHub repo
 exists and the first CI push has gone green.
 
@@ -47,7 +47,7 @@ endpoint that renders the template against the JSON request body.
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo build --release --bin datamapper-on-rust
+cargo build --release --bin datamapper
 cargo test --no-fail-fast
 cargo audit --deny warnings
 ( cd book && mdbook build )
@@ -89,42 +89,41 @@ Run these in order the first time; subsequent releases are just
 
 1. **Create the GitHub repo:**
    ```bash
-   gh repo create Buerostack/DataMapper-on-Rust --public \
+   gh repo create turnerrainer/datamapper --public \
      --source=. --remote=origin --push
    ```
    (`--push` sends the current `dev` branch straight to origin.)
 
 2. **Enable Pages via workflow:**
    ```bash
-   gh api repos/Buerostack/DataMapper-on-Rust/pages -X POST \
+   gh api repos/turnerrainer/datamapper/pages -X POST \
      -f 'build_type=workflow'
    ```
 
 3. **Bump Actions workflow permissions to Read+Write:**
    ```bash
-   gh api repos/Buerostack/DataMapper-on-Rust/actions/permissions/workflow \
+   gh api repos/turnerrainer/datamapper/actions/permissions/workflow \
      -X PUT \
      -F 'default_workflow_permissions=write' \
      -F 'can_approve_pull_request_reviews=false'
    ```
 
 4. **Create the Docker Hub repo** at
-   <https://hub.docker.com/repositories/buerostack> → New
-   repository → name `datamapper-on-rust` → Public.
+   <https://hub.docker.com/repositories/turnerrainer> → New
+   repository → name `datamapper` → Public.
 
 5. **Generate a scoped Docker Hub PAT** at
    <https://app.docker.com/settings/personal-access-tokens> →
    New Access Token → **Restricted access** to
-   `buerostack/datamapper-on-rust` only → **Read + Write +
-   Delete**.
+   `turnerrainer/datamapper` only → **Read + Write + Delete**.
 
 6. **Set repo secrets** (paste the token as stdin so it doesn't
    land in shell history):
    ```bash
    gh secret set DOCKERHUB_USERNAME \
-     --repo Buerostack/DataMapper-on-Rust --body 'buerostack'
+     --repo turnerrainer/datamapper --body 'turnerrainer'
    echo -n '<paste-token-here>' | gh secret set DOCKERHUB_TOKEN \
-     --repo Buerostack/DataMapper-on-Rust
+     --repo turnerrainer/datamapper
    ```
 
 7. **Watch the first-push CI go green.** `tests`, `security`,
@@ -132,9 +131,9 @@ Run these in order the first time; subsequent releases are just
 
 8. **Cut the first release:**
    ```bash
-   git tag -a v0.1.0-rc.1 \
-     -m "DataMapper-on-Rust v0.1.0-rc.1 — Rust MVP"
-   git push origin v0.1.0-rc.1
+   git tag -a v0.1.0-alpha.1 \
+     -m "DataMapper v0.1.0-alpha.1 — Rust MVP"
+   git push origin v0.1.0-alpha.1
    ```
    Tag push triggers `publish.yml`: multi-arch build → Trivy →
    arch smoke test → cosign sign both registries. Watch the
@@ -142,18 +141,18 @@ Run these in order the first time; subsequent releases are just
 
 9. **After first publish, link the auto-created GHCR package**
    back to the repo at
-   <https://github.com/orgs/Buerostack/packages/container/datamapper-on-rust/settings>
+   <https://github.com/users/turnerrainer/packages/container/datamapper/settings>
    → **Change visibility** to **Public** if desired → **Manage
-   Actions access** → link `Buerostack/DataMapper-on-Rust` with
+   Actions access** → link `turnerrainer/datamapper` with
    **Write** role. (Without this, subsequent `GITHUB_TOKEN`
    pushes to GHCR fail with a permissions error.)
 
 10. **Verify from a fresh machine:**
     ```bash
     docker logout && docker pull \
-      docker.io/buerostack/datamapper-on-rust:0.1.0-rc.1
+      docker.io/turnerrainer/datamapper:0.1.0-alpha.1
     docker run -d --rm -p 3000:3000 \
-      docker.io/buerostack/datamapper-on-rust:0.1.0-rc.1
+      docker.io/turnerrainer/datamapper:0.1.0-alpha.1
     curl -fsS http://localhost:3000/healthz
     ```
 
@@ -167,7 +166,7 @@ Run these in order the first time; subsequent releases are just
 | Cross-project ruleset (authoritative) | [`../DEV-REQUIREMENTS.md`](../DEV-REQUIREMENTS.md) |
 | Domain design (DataMapper-specific) | [`./docs/DESIGN.md`](./docs/DESIGN.md) |
 | Project-specific standards addendum | [`./STANDARDS.md`](./STANDARDS.md) |
-| Public docs | https://buerostack.github.io/DataMapper-on-Rust/ (after first push) |
+| Public docs | https://turnerrainer.github.io/datamapper/ (after first push) |
 | Full change history | [`./CHANGELOG.md`](./CHANGELOG.md) |
 | Private security disclosure | [`./SECURITY.md`](./SECURITY.md) |
 | CI workflows | [`.github/workflows/`](./.github/workflows/) |

@@ -34,7 +34,7 @@ Include, when you can:
 ## Supported versions
 
 Only the latest published release receives security fixes.
-DataMapper-on-Rust is pre-1.0 and follows SemVer — minor bumps are
+DataMapper is pre-1.0 and follows SemVer — minor bumps are
 the norm, patch releases are cut only for critical fixes on the
 current line.
 

@@ -11,14 +11,14 @@ Two paths. Pick one.
 
 ```bash
 docker run -d --name datamapper -p 3000:3000 \
-  buerostack/datamapper-on-rust:rc
+  turnerrainer/datamapper:alpha
 ```
 
 **B. Build from source:**
 
 ```bash
-git clone -b dev https://github.com/Buerostack/DataMapper-on-Rust.git
-cd DataMapper-on-Rust
+git clone -b dev https://github.com/turnerrainer/datamapper.git
+cd datamapper
 cargo build --release
 ./target/release/datamapper-on-rust
 ```
@@ -76,7 +76,7 @@ EOF
 
 docker run -d --name datamapper -p 3000:3000 \
   -v "$PWD/DSL:/app/DSL:ro" \
-  buerostack/datamapper-on-rust:rc
+  turnerrainer/datamapper:alpha
 ```
 
 Now hit it:

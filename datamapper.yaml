@@ -1,10 +1,10 @@
-# DataMapper-on-Rust default runtime config.
+# DataMapper default runtime config.
 #
 # This file ships with the container image at /app/datamapper.yaml.
 # Bind-mount to override at deploy time; see docker-compose.yml.
 #
 # Full reference: book/src/configuration.md
-# (published: https://buerostack.github.io/DataMapper-on-Rust/configuration.html)
+# (published: https://turnerrainer.github.io/datamapper/configuration.html)
 
 # TCP port the HTTP server binds on 0.0.0.0.
 port: 3000

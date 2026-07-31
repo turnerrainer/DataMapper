@@ -1,4 +1,4 @@
-//! Axum router — HTTP surface of DataMapper-on-Rust.
+//! Axum router — HTTP surface of DataMapper.
 //!
 //! Routes:
 //! * `POST /:project/*view` — resolve `<project>/<view>.hbs` under

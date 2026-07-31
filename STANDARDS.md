@@ -1,6 +1,6 @@
-# Standards for DataMapper-on-Rust
+# Standards for DataMapper
 
-This file names the DataMapper-on-Rust identity fields (§0) and
+This file names the DataMapper identity fields (§0) and
 otherwise defers to the cross-project ruleset in
 [`../DEV-REQUIREMENTS.md`](../DEV-REQUIREMENTS.md).
 
@@ -13,21 +13,21 @@ today, there are none.
 
 | Variable | Value |
 |---|---|
-| Product name | `DataMapper-on-Rust` |
-| Cargo crate name | `datamapper-on-rust` |
-| Binary name | `datamapper-on-rust` |
-| GitHub repo | `github.com/Buerostack/DataMapper-on-Rust` |
-| Docker Hub image | `buerostack/datamapper-on-rust` |
-| GHCR image | `ghcr.io/buerostack/datamapper-on-rust` |
+| Product name | `DataMapper` |
+| Cargo crate name | `datamapper` |
+| Binary name | `datamapper` |
+| GitHub repo | `github.com/turnerrainer/datamapper` |
+| Docker Hub image | `turnerrainer/datamapper` |
+| GHCR image | `ghcr.io/turnerrainer/datamapper` |
 | License | Apache-2.0 |
-| Book title | `DataMapper-on-Rust` |
+| Book title | `DataMapper` |
 | First stable target | `v1.0.0` on `main` |
 | Author | Rainer Türner |
-| Namespace on Buerostack | `Buerostack/DataMapper-on-Rust` |
+| Upstream (Node.js origin) | `Buerostack/DataMapper` |
 
 ## 1. Deviations from DEV-REQUIREMENTS
 
-**None.** DataMapper-on-Rust meets DEV-REQUIREMENTS §§ 1–15 as
+**None.** DataMapper meets DEV-REQUIREMENTS §§ 1–15 as
 written. If a subsequent decision diverges, that decision plus its
 justification lands here (and in the commit message per
 DEV-REQUIREMENTS front-matter rule).

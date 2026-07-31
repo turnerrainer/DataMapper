@@ -1,16 +1,16 @@
 [book]
-title = "DataMapper-on-Rust"
+title = "DataMapper"
 authors = ["Rainer Türner"]
-description = "Reference for third-party clients of DataMapper-on-Rust."
+description = "Reference for third-party clients of DataMapper."
 language = "en"
 src = "src"
 
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "light"
-git-repository-url = "https://github.com/Buerostack/DataMapper-on-Rust"
-edit-url-template = "https://github.com/Buerostack/DataMapper-on-Rust/edit/dev/book/{path}"
-site-url = "/DataMapper-on-Rust/"
+git-repository-url = "https://github.com/turnerrainer/datamapper"
+edit-url-template = "https://github.com/turnerrainer/datamapper/edit/dev/book/{path}"
+site-url = "/datamapper/"
 
 [output.html.search]
 enable = true
