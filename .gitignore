@@ -28,3 +28,9 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Cross-impl repro harness — JS deps + copied DSL tree are
+# populated by `scripts/setup-repro.sh` and by the test itself.
+/compat/js-server/node_modules/
+/compat/js-server/DSL/
+/compat/js-server/package-lock.json

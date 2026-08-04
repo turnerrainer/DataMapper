@@ -22,9 +22,34 @@ Next contributor (human or Claude) must:
 1. Read [`../DEV-REQUIREMENTS.md`](../DEV-REQUIREMENTS.md)
    front-to-back before touching anything. That's the
    authoritative ruleset for all Buerostack Rust projects.
-2. Read this file for DataMapper-specific state.
-3. Read [`docs/DESIGN.md`](./docs/DESIGN.md) for domain shape.
-4. Run the verification set (below) — every command exits 0.
+2. Read [`../REFACTO-REQUIREMENTS.md`](../REFACTO-REQUIREMENTS.md) —
+   this repo is a reimplementation, so the refacto ruleset applies
+   on top of the base ruleset.
+3. Read this file for DataMapper-specific state.
+4. Read [`docs/DESIGN.md`](./docs/DESIGN.md) for domain shape.
+5. Read [`DIVERGENCES.md`](./DIVERGENCES.md), [`MIGRATION.md`](./MIGRATION.md),
+   and [`docs/REFACTO-MATRIX.md`](./docs/REFACTO-MATRIX.md) for the
+   JS-source-of-truth relationship.
+6. Run the verification set (below) — every command exits 0.
+
+## REFACTO-REQUIREMENTS compliance
+
+Tracked under `refacto/refacto-requirements-compliance` branch
+(WIP as of 2026-08-04). Compliance artefacts:
+
+| Artefact | Path |
+|---|---|
+| §1.1 coverage matrix | [`docs/REFACTO-MATRIX.md`](./docs/REFACTO-MATRIX.md) |
+| §1.3 test-corpus port plan | [`docs/REFACTO-PORT-PLAN.md`](./docs/REFACTO-PORT-PLAN.md) |
+| §2 audit (contract preservation) | [`docs/REFACTO-AUDIT-S2.md`](./docs/REFACTO-AUDIT-S2.md) |
+| §8.3 negative-space audit | [`docs/REFACTO-AUDIT-NEGATIVE-SPACE.md`](./docs/REFACTO-AUDIT-NEGATIVE-SPACE.md) |
+| §5 divergences | [`DIVERGENCES.md`](./DIVERGENCES.md) |
+| §7.2 migration guide | [`MIGRATION.md`](./MIGRATION.md) |
+| §10.2 known deviations from REFACTO-REQUIREMENTS | [`REFACTO-DEVIATIONS.md`](./REFACTO-DEVIATIONS.md) |
+| §7.3 syntactic corpus | [`compat/js-DSL/`](./compat/) |
+| §7.3 CI gate on that corpus | `tests/it_compat_js_dsl_corpus.rs` |
+| §4.3 cross-impl repro | `tests/it_repro_cross_impl.rs`, `compat/js-server/` |
+| §4.4 regression tests | `tests/it_regression_refacto.rs` |
 
 ## What this repo IS today
 

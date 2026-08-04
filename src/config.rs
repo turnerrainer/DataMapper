@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     #[serde(default = "default_port")]
     pub port: u16,
@@ -34,6 +35,7 @@ pub struct AppConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Limits {
     #[serde(default = "default_max_request_bytes")]
     pub max_request_bytes: usize,
@@ -86,6 +88,12 @@ impl AppConfig {
     /// back to defaults if no file is found on any conventional path.
     /// Returns `(config, source_path_or_none)` — caller logs which
     /// took effect.
+    ///
+    /// Post-load, `PORT` env var (JS DataMapper compat, see
+    /// `REFACTO-AUDIT-S2.md` F-01 / D-001) overrides the loaded/default
+    /// `port` field when the loaded config did not explicitly set it.
+    /// The explicit-set signal is: config file present AND contains
+    /// a `port:` key.
     pub fn load_or_default() -> Result<(Self, Option<PathBuf>), DataMapperError> {
         for path in config_search_paths() {
             if path.exists() {
@@ -95,11 +103,35 @@ impl AppConfig {
                 let cfg: AppConfig = serde_yaml_ng::from_str(&body).map_err(|e| {
                     DataMapperError::Internal(format!("parsing config {}: {}", path.display(), e))
                 })?;
+                let file_sets_port = body.lines().any(|l| {
+                    l.trim_start().starts_with("port:") && !l.trim_start().starts_with("#")
+                });
+                let cfg = if file_sets_port {
+                    cfg
+                } else {
+                    apply_port_env(cfg)
+                };
                 return Ok((cfg, Some(path)));
             }
         }
-        Ok((Self::default(), None))
+        Ok((apply_port_env(Self::default()), None))
     }
+}
+
+fn apply_port_env(mut cfg: AppConfig) -> AppConfig {
+    if let Ok(p) = std::env::var("PORT") {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            match trimmed.parse::<u16>() {
+                Ok(port) => cfg.port = port,
+                Err(_) => tracing::warn!(
+                    "PORT env var '{}' is not a valid u16 port number; ignoring (JS DataMapper compat)",
+                    trimmed
+                ),
+            }
+        }
+    }
+    cfg
 }
 
 fn config_search_paths() -> Vec<PathBuf> {

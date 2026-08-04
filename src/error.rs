@@ -33,6 +33,14 @@ pub enum DataMapperError {
     #[error("method not allowed on this route")]
     MethodNotAllowed,
 
+    /// R2.5 / D-007: JS DataMapper's `express.urlencoded` accepted
+    /// form-encoded bodies. Rust intentionally rejects them, but
+    /// with a specific error naming the Content-Type so the operator
+    /// can pinpoint the mismatch instead of parsing an `InvalidJson`
+    /// message.
+    #[error("Content-Type '{0}' is not supported — post JSON with Content-Type: application/json")]
+    UnsupportedContentType(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -47,6 +55,7 @@ impl DataMapperError {
             DataMapperError::InvalidJson(_) => StatusCode::BAD_REQUEST,
             DataMapperError::InvalidPath(_) => StatusCode::BAD_REQUEST,
             DataMapperError::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+            DataMapperError::UnsupportedContentType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             DataMapperError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -60,6 +69,7 @@ impl DataMapperError {
             DataMapperError::InvalidJson(_) => "InvalidJson",
             DataMapperError::InvalidPath(_) => "InvalidPath",
             DataMapperError::MethodNotAllowed => "MethodNotAllowed",
+            DataMapperError::UnsupportedContentType(_) => "UnsupportedContentType",
             DataMapperError::Internal(_) => "Internal",
         }
     }

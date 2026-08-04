@@ -1,0 +1,11 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/advanced/nested_each_index   -H 'Content-Type: application/json' -H 'type: json'   -d '{"matrix":[[1,2,3],[4,5,6],[7,8,9]]}'
+--}}
+{
+  "rows": [
+    {{#each matrix}}{{#if @index}},{{/if}}{
+      "row": {{@index}},
+      "cols": [{{#each this}}{{#if @index}},{{/if}}{{this}}{{/each}}]
+    }{{/each}}
+  ]
+}

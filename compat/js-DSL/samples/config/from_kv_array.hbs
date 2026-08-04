@@ -1,0 +1,10 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/config/from_kv_array \
+  -H 'Content-Type: application/json' -H 'type: json' \
+  -d '{"configuration":[{"key":"theme","value":"dark"},{"key":"pageSize","value":"20"},{"key":"featureX","value":"true"}]}'
+--}}
+{
+  "theme": "{{configuration.[0].value}}",
+  "pageSize": "{{configuration.[1].value}}",
+  "featureX": {{#if configuration.[2].value}}true{{else}}false{{/if}}
+}

@@ -1,0 +1,6 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/strings/join_tags_csv   -H 'Content-Type: application/json' -H 'type: json'   -d '{"tags":["alpha","beta","gamma"]}'
+--}}
+{
+  "csv": "{{#each tags}}{{#if @index}},{{/if}}{{this}}{{/each}}"
+}

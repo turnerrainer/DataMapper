@@ -79,8 +79,26 @@ impl Renderer {
                 tried: logical_tried.clone(),
             })?;
 
-        let body = std::fs::read_to_string(&found)
+        let raw = std::fs::read_to_string(&found)
             .map_err(|e| DataMapperError::Internal(format!("reading template: {e}")))?;
+
+        // R2.1 / D-010: JS Handlebars resolves `{{foo.length}}` via
+        // the JS Array `.length` property; handlebars-rust does not.
+        // Silently rendering empty (or 500-ing on subscript-into-array)
+        // is the R2.1 pattern the REFACTO requirement calls out. We
+        // honour the JS semantic by rewriting `.length` accessors to
+        // the `len` helper before render (source-compatible), and
+        // emit a `warn!` naming the template so operators can update
+        // the DSL at their leisure (see MIGRATION.md §.length).
+        let body = if contains_dot_length_accessor(&raw) {
+            tracing::warn!(
+                "template {} uses `.length` accessor; auto-rewriting to `(len …)` for compat with the JS DataMapper DSL — please migrate the template body (see DIVERGENCES.md D-010, MIGRATION.md §.length)",
+                view_label
+            );
+            rewrite_dot_length(&raw)
+        } else {
+            raw
+        };
 
         self.reg
             .render_template(&body, context)
@@ -89,6 +107,168 @@ impl Renderer {
                 message: e.to_string(),
             })
     }
+}
+
+/// Rewrite `{{ path.length }}`, `{{{ path.length }}}`, and block
+/// helpers like `{{#if path.length}}` / `{{#unless path.length}}` to
+/// their `len`-helper equivalents. Comment blocks (`{{! ... }}` and
+/// `{{!-- ... --}}`) are skipped. `path` may contain segment
+/// components like `foo.[0].bar` (Handlebars index syntax).
+pub fn rewrite_dot_length(template: &str) -> String {
+    let mut out = String::with_capacity(template.len());
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            // Find the matching closing `}}` (or `}}}` for triple).
+            let triple = i + 2 < bytes.len() && bytes[i + 2] == b'{';
+            let open_end = if triple { i + 3 } else { i + 2 };
+            // Handle comment blocks — copy verbatim.
+            if open_end < bytes.len() && bytes[open_end] == b'!' {
+                let close = find_close(bytes, open_end);
+                out.push_str(&template[i..close]);
+                i = close;
+                continue;
+            }
+            let close = find_close(bytes, open_end);
+            let inner = &template[open_end..close.saturating_sub(if triple { 3 } else { 2 })];
+            let rewritten = rewrite_dot_length_inner(inner);
+            out.push_str(if triple { "{{{" } else { "{{" });
+            out.push_str(&rewritten);
+            out.push_str(if triple { "}}}" } else { "}}" });
+            i = close;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn find_close(bytes: &[u8], start: usize) -> usize {
+    let mut j = start;
+    while j + 1 < bytes.len() {
+        if bytes[j] == b'}' && bytes[j + 1] == b'}' {
+            // Include the closing braces (2 or 3).
+            if j + 2 < bytes.len() && bytes[j + 2] == b'}' {
+                return j + 3;
+            }
+            return j + 2;
+        }
+        j += 1;
+    }
+    bytes.len()
+}
+
+/// Rewrite the inner (brace-less) body of a mustache expression.
+///
+/// Two shapes get rewritten:
+///
+/// 1. Value-position: `{{path.length}}` / `{{{path.length}}}` →
+///    `{{len path}}`. JS Handlebars would emit the number; the `len`
+///    helper does the same.
+/// 2. Block-condition: `{{#if path.length}}` / `{{#unless path.length}}` →
+///    `{{#if path}}` / `{{#unless path}}`. JS `if arr.length` is
+///    truthy iff `arr.length > 0`, which for arrays and strings is
+///    exactly the truthiness of `arr` itself in handlebars-rust.
+///    Rewriting to `(len path)` would be wrong because
+///    handlebars-rust treats the integer `0` as truthy.
+///
+/// Anything else that mentions `.length` is left as-is; the render
+/// layer will surface the mismatch.
+fn rewrite_dot_length_inner(inner: &str) -> String {
+    let trimmed = inner.trim();
+    // Simple value case: bare `path.length` (possibly with whitespace).
+    if let Some(path) = trimmed.strip_suffix(".length") {
+        if !path.is_empty() && is_bare_path(path) {
+            return format!(" len {} ", path);
+        }
+    }
+    // Block-opener cases like `#if path.length`, `#unless path.length`.
+    // Rewrite to `#if path` — `arr.length > 0` ⟺ `arr` non-empty, and
+    // handlebars-rust's `#if` treats empty arrays / strings as falsy.
+    for prefix in ["#if ", "#unless ", "else if ", "if ", "unless "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            if let Some(path) = rest.strip_suffix(".length") {
+                if !path.is_empty() && is_bare_path(path) {
+                    return format!("{}{}", prefix, path);
+                }
+            }
+        }
+    }
+    inner.to_string()
+}
+
+/// A Handlebars path segment: identifier chars, `.`, `[`, `]`, digits,
+/// slashes (for relative-path scoping like `../foo`). Reject anything
+/// else so we don't accidentally rewrite arbitrary subexpressions.
+fn is_bare_path(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '[' | ']' | '/' | '@'))
+}
+
+/// Match `{{...foo.length...}}` and `{{{...foo.length...}}}` mustache
+/// blocks whose body ends in `.length` (possibly followed by more
+/// identifier chars — we only warn on the exact `.length` token). We
+/// scan mustache blocks rather than the whole file to skip
+/// `{{!-- ... .length ... --}}` comment blocks.
+pub fn contains_dot_length_accessor(template: &str) -> bool {
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            let mut j = i + 2;
+            // Skip triple-brace / comment / raw-block markers.
+            if j < bytes.len() && (bytes[j] == b'!' || bytes[j] == b'{') {
+                // Comments `{{! ... }}` and `{{!-- ... --}}` are
+                // ignored. Triple-brace `{{{ ... }}}` we still scan.
+                if bytes[j] == b'!' {
+                    // find the closing `}}` — comment; skip.
+                    while j + 1 < bytes.len() && !(bytes[j] == b'}' && bytes[j + 1] == b'}') {
+                        j += 1;
+                    }
+                    i = j + 2;
+                    continue;
+                }
+            }
+            // Scan mustache body up to closing braces.
+            let start = j;
+            while j + 1 < bytes.len() && !(bytes[j] == b'}' && bytes[j + 1] == b'}') {
+                j += 1;
+            }
+            let body = &template[start..j];
+            if has_dot_length_token(body) {
+                return true;
+            }
+            i = j + 2;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+fn has_dot_length_token(body: &str) -> bool {
+    // Match `.length` where `length` is a full identifier terminator
+    // (not `.lengthX` or `.length_x`). Split-and-check is simpler
+    // than pulling in `regex`.
+    let mut rest = body;
+    while let Some(pos) = rest.find(".length") {
+        let after = &rest[pos + ".length".len()..];
+        let next = after.chars().next();
+        // If the char right after `.length` continues an identifier,
+        // it's a different token — skip.
+        let ends = match next {
+            None => true,
+            Some(c) => !(c.is_ascii_alphanumeric() || c == '_'),
+        };
+        if ends {
+            return true;
+        }
+        rest = after;
+    }
+    false
 }
 
 /// Reject empty, absolute, or traversal-carrying segments. Called on
