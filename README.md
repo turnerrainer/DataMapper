@@ -3,7 +3,7 @@
 Handlebars-templated payload shaping layer. Rust re-implementation
 of [Buerostack/DataMapper](https://github.com/Buerostack/DataMapper).
 
-**Version:** 0.1.0-alpha.1 · **License:** Apache-2.0
+**Version:** 0.1.0-alpha.2 · **License:** Apache-2.0
 · **Docs:** [turnerrainer.github.io/datamapper](https://turnerrainer.github.io/datamapper/)
 · **Images:** `docker.io/turnerrainer/datamapper:alpha`, `ghcr.io/turnerrainer/datamapper:alpha`
 

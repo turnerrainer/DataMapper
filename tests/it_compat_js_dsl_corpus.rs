@@ -7,7 +7,7 @@
 //! recommends, and asserts the render succeeds. A silent regression
 //! shows up as a failing row; a real divergence (e.g. a template
 //! using a syntax the Rust engine cannot resolve) must be paired
-//! with a `DIVERGENCES.md` entry before this test can be marked
+//! with a `book/src/porting-from-js.md` entry before this test can be marked
 //! `#[ignore]` on a per-file basis.
 
 use datamapper::{
@@ -161,7 +161,7 @@ async fn js_source_of_truth_corpus_renders_end_to_end() {
         assert_eq!(
             status, 200,
             "JS source-of-truth DSL {path} did not render 200 on Rust — \
-             either fix the Rust engine or add a DIVERGENCES.md entry \
+             either fix the Rust engine or add a book/src/porting-from-js.md entry \
              pinning down the intentional gap. Body: {text}"
         );
         let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|e| {

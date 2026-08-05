@@ -5,7 +5,7 @@ REST API. Drop a file at `DSL/samples/ping.hbs` → it answers
 `POST /samples/ping`. Send a JSON body → get the rendered output
 back as JSON (or HTML, if that's what the template produces).
 
-**Version:** 0.1.0-alpha.1 · **License:** Apache-2.0
+**Version:** 0.1.0-alpha.2 · **License:** Apache-2.0
 · **Source:** [github.com/turnerrainer/datamapper](https://github.com/turnerrainer/datamapper)
 
 ## What DataMapper is for
@@ -59,6 +59,13 @@ usable in any template. Full reference: [Configuration](./configuration.md).
 - **[Getting started](./getting-started.md)** — install, first
   template, verify.
 - **[Configuration](./configuration.md)** — every knob, every
-  helper.
+  environment variable, every boot-log line.
+- **[Handlebars helpers](./handlebars-helpers.md)** — every helper
+  the templates can call, with runnable examples.
+- **[Sample DSLs](./samples.md)** — walkthrough of every shipped
+  sample with the exact curl to run it and the response you'll get.
 - **[Failure modes](./failure-modes.md)** — every HTTP status +
   error code + what to do about it.
+- **[Porting from JS DataMapper](./porting-from-js.md)** — if
+  you're moving from the JS implementation, this is the one page
+  to read.

@@ -82,17 +82,16 @@ impl Renderer {
         let raw = std::fs::read_to_string(&found)
             .map_err(|e| DataMapperError::Internal(format!("reading template: {e}")))?;
 
-        // R2.1 / D-010: JS Handlebars resolves `{{foo.length}}` via
-        // the JS Array `.length` property; handlebars-rust does not.
-        // Silently rendering empty (or 500-ing on subscript-into-array)
-        // is the R2.1 pattern the REFACTO requirement calls out. We
-        // honour the JS semantic by rewriting `.length` accessors to
-        // the `len` helper before render (source-compatible), and
-        // emit a `warn!` naming the template so operators can update
-        // the DSL at their leisure (see MIGRATION.md §.length).
+        // JS Handlebars resolves `{{foo.length}}` via the JS Array
+        // `.length` property; handlebars-rust does not. Rather than
+        // silently rendering empty (or 500-ing on subscript-into-
+        // array), we rewrite `.length` accessors to the `len` helper
+        // before render — ported JS DSLs work zero-touch — and emit
+        // a warn naming the template so operators can update the DSL
+        // at their leisure. See book/src/porting-from-js.md.
         let body = if contains_dot_length_accessor(&raw) {
             tracing::warn!(
-                "template {} uses `.length` accessor; auto-rewriting to `(len …)` for compat with the JS DataMapper DSL — please migrate the template body (see DIVERGENCES.md D-010, MIGRATION.md §.length)",
+                "template {} uses `.length` accessor; auto-rewriting to `(len …)` for JS DataMapper DSL compat — see book/src/porting-from-js.md",
                 view_label
             );
             rewrite_dot_length(&raw)

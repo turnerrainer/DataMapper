@@ -1,13 +1,14 @@
-//! Regression tests for REFACTO-REQUIREMENTS §2 fixes.
+//! Regression tests for the JS-source-of-truth compat fixes.
 //!
 //! Every test in this file is a fixture that would have FAILED
-//! against the code as of `v0.1.0-alpha.1` and is the executable
-//! guard for one of the R2 findings in
-//! `docs/REFACTO-AUDIT-S2.md`. Removing a test here MUST be paired
-//! with an entry in `DIVERGENCES.md` per R4.4.
+//! against the code as of `v0.1.0-alpha.1`. Test names encode the
+//! finding they guard (`f01_port_env_var_…`, `f02_dot_length_…`)
+//! so a future contributor can trace them back to the in-house
+//! audit paperwork on the maintainer's disk.
 //!
-//! Test names encode the finding they guard: `f01_port_env_var_…`
-//! → REFACTO-AUDIT-S2.md F-01.
+//! Removing a test here must be paired with a book-side
+//! porting-guide update: users who used to depend on the JS
+//! behaviour lose their compat guarantee otherwise.
 
 use datamapper::{
     config::AppConfig,
@@ -371,7 +372,7 @@ fn f06_request_limit_default_is_2_mib_binary() {
         cfg.limits.max_request_bytes,
         2 * 1024 * 1024,
         "default request-body cap must stay at 2 MiB binary; changing it \
-         requires a DIVERGENCES.md entry (currently D-002)"
+         requires an update to book/src/porting-from-js.md"
     );
 }
 

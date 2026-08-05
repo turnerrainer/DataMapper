@@ -7,89 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — REFACTO-REQUIREMENTS v1.0 compliance pass
+## [0.1.0-alpha.2] - 2026-08-05
 
-Full compliance work against `Buerostack/REFACTO-REQUIREMENTS.md v1.0`
-using JS `Buerostack/DataMapper` `v1.0.0` (`2025-09-24`) as the
-source of truth.
+### Added — JS-source-of-truth compatibility
 
-- `docs/REFACTO-MATRIX.md` — §1.1 coverage matrix (55 rows: HTTP
-  routes, config fields, CLI, env vars, helpers, content
-  negotiation, path sanitisation, error bodies, template context,
-  boot log, samples, tests, packaging, docs). Every row carries a
-  planned status, a current status, and a verification level.
-- `docs/REFACTO-PORT-PLAN.md` — §1.3 test-corpus port plan.
-- `docs/REFACTO-AUDIT-S2.md` — §2 audit: 11 non-trivial findings
-  across silent drops, unknown-field tolerance, default drift, and
-  error-string parity.
-- `docs/REFACTO-AUDIT-NEGATIVE-SPACE.md` — §8.3 negative-space
-  audit: 21 Rust-side extensions checked against JS-derived
-  operator expectations.
-- `DIVERGENCES.md` — §5 divergence log with 26 documented drifts
-  (D-0nn) + 15 documented extensions (D-1nn). Every entry names
-  source and target locations, motivation, migration, reversibility.
-- `MIGRATION.md` — §7.2 operator porting guide indexed to
-  `DIVERGENCES.md`. Includes an operator checklist.
-- `REFACTO-DEVIATIONS.md` — §10.2 record of MUSTs intentionally
-  not met in this pass (default-drift documentation, timestamp
-  format, cross-impl coverage scope).
-- `compat/js-DSL/` — verbatim copy of the JS source-of-truth
-  template corpus (§7.3).
-- `compat/js-server/` — staged JS server for cross-impl repro.
-- `tests/it_compat_js_dsl_corpus.rs` — §7.3 CI gate: every JS
-  source-of-truth template renders end-to-end on Rust.
-- `tests/it_repro_cross_impl.rs` — §4.3 cross-implementation
-  fixtures: identical requests posted to both JS and Rust,
-  responses diffed for equivalence modulo the documented
-  divergence keys.
-- `tests/it_regression_refacto.rs` — §4.4 regression tests, 17
-  fixtures. Each guards one §2 finding and was written to fail
-  before its fix.
+Compatibility work against the JS `Buerostack/DataMapper` `v1.0.0`
+(`2025-09-24`) source of truth so existing JS deployments and DSLs
+port zero-touch. Full porting summary in
+[`book/src/porting-from-js.md`](./book/src/porting-from-js.md).
 
-### Changed — R2 fixes landed
+- **`PORT` env var honoured as fallback** when the loaded config
+  does not explicitly set `port:`. Fixes a silent config drop for
+  operators lifting JS docker-compose / systemd unit files.
+- **Auto-rewrite of the JS `.length` accessor**: `{{arr.length}}` is
+  rewritten to `{{len arr}}` and `{{#if arr.length}}` to
+  `{{#if arr}}` at load time, with a `warn!` per affected template.
+  Ported JS DSLs render correctly without hand-editing.
+- **`415 UnsupportedContentType`** for non-JSON request bodies,
+  naming the offending Content-Type in the JSON error body. Replaces
+  a misleading `400 InvalidJson` for form-encoded posts.
+- **Boot `warn!`** if `.hbs` files still live under `./views/` — the
+  JS-side legacy root Rust no longer serves from — so operators get
+  a single boot-log signal instead of silent 404s.
+- **Boot INFO** aggregating templates that still use the JS `.length`
+  accessor, so operators can prioritise migration work at a glance.
+- **JS-compat single-line boot log** —
+  `DataMapper listening on :<port>` — emitted on stdout alongside
+  the structured tracing output. Log-grep monitors carried over from
+  the JS deployment keep working.
 
-- **F-01 / D-001**: Rust now reads the `PORT` env var as a fallback
-  when the loaded config does not explicitly set `port:`. Fixes a
-  silent config drop for operators porting JS deployments.
-- **F-02 / D-010**: Templates using the JS `.length` accessor are
-  auto-rewritten at load time — `{{arr.length}}` → `{{len arr}}`
-  and `{{#if arr.length}}` → `{{#if arr}}`. A `warn!` fires per
-  affected template. JS DSLs now port zero-touch.
-- **F-03 / D-007**: Non-JSON request bodies return
-  `415 UnsupportedContentType` naming the offending Content-Type,
-  instead of a misleading `400 InvalidJson`.
-- **F-04 / D-003**: Boot emits a `warn!` when `.hbs` files exist
-  under `./views/` (the JS-side legacy root Rust no longer serves
-  from).
-- **F-05 / R6.1**: `#[serde(deny_unknown_fields)]` on `AppConfig`
-  and `Limits` — a typo'd YAML field now hard-fails at parse.
-- **F-11 / D-016**: The JS-compat boot line
-  `DataMapper listening on :<port>` is emitted on stdout alongside
-  the structured tracing output. Log-grep monitors keyed on the JS
-  line continue to work.
+### Changed
 
-### Added — new error variant
+- **`#[serde(deny_unknown_fields)]`** on `AppConfig` and `Limits`
+  structs — a typo'd YAML field now hard-fails at parse instead of
+  silently no-op'ing.
+- **`UnsupportedContentType(String)`** added to `DataMapperError`,
+  mapped to HTTP 415.
 
-- `UnsupportedContentType(String)` on `DataMapperError`, mapped to
-  HTTP 415 with the offending media type embedded in the message.
+### Docs
+
+- **`book/src/porting-from-js.md`** — public JS→Rust porting summary.
+- **`book/src/samples.md`** — walkthrough of every sample DSL with
+  the exact curl command and expected response.
+- **`book/src/handlebars-helpers.md`** — dedicated helper reference
+  with runnable examples, including migration notes.
+- **`book/src/configuration.md`** — expanded to cover `PORT` env var,
+  auto-rewrite behaviour, and every boot-log line an operator will
+  see.
+- **`book/src/failure-modes.md`** — adds `UnsupportedContentType`
+  row.
 
 ### Test coverage
 
-- Baseline: 40 tests (24 unit + 16 e2e), all green.
-- Post-refacto: 58 tests (24 unit + 16 e2e + 17 regression + 1
-  compat corpus, plus 1 cross-impl repro when JS server is
-  staged), all green.
+- Baseline: 40 tests (24 unit + 16 e2e).
+- Post-alpha.2: 59 tests (24 unit + 16 e2e + 17 regression + 1
+  compat corpus + 1 cross-impl repro).
 
-### Known gaps (per §9.2)
+### Known gaps
 
 - Timestamp format from `{{now}}` still uses `+00:00` and
-  nanosecond precision (JS uses `Z` and millisecond). See D-008 /
-  `REFACTO-DEVIATIONS.md`.
+  nanosecond precision (JS uses `Z` and millisecond).
 - Default `max_request_bytes` still 2 MiB binary (JS was 2 000 000
-  decimal). See D-002 / `REFACTO-DEVIATIONS.md`.
-- Cross-impl repro test is gated on a staged `compat/js-server/`
-  with `node_modules/` populated; CI must set that up or set
-  `DATAMAPPER_REPRO_STRICT=1` to gate on it.
+  decimal).
+- Cross-impl repro test needs a staged `compat/js-server/` — see
+  `scripts/setup-repro.sh`.
 
 ## [0.1.0-alpha.1] - 2026-07-29
 
@@ -129,5 +110,6 @@ source of truth.
   004 (JSON-schema validation), 005 (helper expansion) filed.
 - 24 unit + 16 integration tests, all green.
 
-[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.1

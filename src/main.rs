@@ -36,17 +36,13 @@ async fn main() -> anyhow::Result<()> {
         cfg.limits.max_response_bytes,
     );
 
-    // REFACTO-REQUIREMENTS §6.2 — boot-time diagnostic pass.
-    // R2.1 / D-003, D-004: warn if the operator has parked
-    // Handlebars templates under a legacy `views/` directory that
-    // JS DataMapper used to also serve from. Rust only searches
-    // `dsl_path`, so those files would 404 silently otherwise.
+    // Boot-time diagnostics for operators porting from JS DataMapper.
+    // Warn on legacy `./views/` .hbs files (JS served that root;
+    // Rust does not).
     warn_on_legacy_views_dir();
-
-    // §6.2 continued: scan the DSL tree for `.length` accessors so
-    // the operator has a single boot-log signal for "which files
-    // still lean on the JS compat rewriter" (D-010). Aggregated so
-    // the log doesn't flood on large trees.
+    // Aggregate INFO listing DSL files still using the JS `.length`
+    // accessor so operators know which files the compat rewriter is
+    // fixing up under the hood.
     warn_on_ported_js_dsl_syntax(&cfg.dsl_path);
 
     let state = AppState {
@@ -60,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("listening on {}", addr);
     // Back-compat with the JS DataMapper boot line so log-grep
     // patterns keyed on `DataMapper listening on :<port>` keep
-    // working. See REFACTO-AUDIT-S2.md F-11 / D-016.
+    // working. See book/src/porting-from-js.md.
     println!("DataMapper listening on :{}", cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -79,7 +75,7 @@ fn warn_on_legacy_views_dir() {
         .count();
     if hbs_count > 0 {
         tracing::warn!(
-            "found {} .hbs file(s) under ./views/ — Rust DataMapper only serves templates from dsl_path (see DIVERGENCES.md D-003)",
+            "found {} .hbs file(s) under ./views/ — Rust DataMapper only serves templates from dsl_path (see book/src/porting-from-js.md)",
             hbs_count
         );
     }
@@ -111,7 +107,7 @@ fn warn_on_ported_js_dsl_syntax(dsl_root: &std::path::Path) {
         // does not flood the boot log.
         let shown: Vec<String> = affected.iter().take(10).cloned().collect();
         tracing::info!(
-            "{} template(s) under {} use the JS `.length` accessor and are being auto-rewritten via the compat helper (see DIVERGENCES.md D-010, MIGRATION.md §.length): {}{}",
+            "{} template(s) under {} use the JS `.length` accessor and are being auto-rewritten via the compat helper (see book/src/porting-from-js.md): {}{}",
             affected.len(),
             dsl_root.display(),
             shown.join(", "),

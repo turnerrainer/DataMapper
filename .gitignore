@@ -34,3 +34,16 @@ Thumbs.db
 /compat/js-server/node_modules/
 /compat/js-server/DSL/
 /compat/js-server/package-lock.json
+
+# In-house refacto audit paperwork (REFACTO-REQUIREMENTS §5, §7.2,
+# §10.2, §1.1, §1.3, §2, §8.3). These live in the working tree so
+# maintainers can consult them locally, but they are NOT published
+# to the public repository. User-facing porting guidance ships in
+# `book/src/porting-from-js.md` instead.
+/DIVERGENCES.md
+/MIGRATION.md
+/REFACTO-DEVIATIONS.md
+/docs/REFACTO-MATRIX.md
+/docs/REFACTO-PORT-PLAN.md
+/docs/REFACTO-AUDIT-S2.md
+/docs/REFACTO-AUDIT-NEGATIVE-SPACE.md

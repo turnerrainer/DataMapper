@@ -3,7 +3,7 @@
 //! For every subsystem the Rust target claims to preserve, run the
 //! exact same request against BOTH the JS source of truth AND the
 //! Rust target, then assert the responses match modulo the
-//! divergences catalogued in `DIVERGENCES.md`.
+//! divergences catalogued in `book/src/porting-from-js.md`.
 //!
 //! This test needs a working Node.js runtime + the JS server staged
 //! under `compat/js-server/` with `node_modules/` populated. When
@@ -310,7 +310,7 @@ async fn cross_impl_repro_matches_modulo_documented_divergences() {
 
     if !failures.is_empty() {
         panic!(
-            "cross-impl repro failures ({} total) — either fix Rust to match JS or add a DIVERGENCES.md entry:\n{}",
+            "cross-impl repro failures ({} total) — either fix Rust to match JS or add a book/src/porting-from-js.md entry:\n{}",
             failures.len(),
             failures.join("\n")
         );

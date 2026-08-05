@@ -20,11 +20,17 @@ docker run -d --name datamapper -p 3000:3000 \
 git clone -b dev https://github.com/turnerrainer/datamapper.git
 cd datamapper
 cargo build --release
-./target/release/datamapper-on-rust
+./target/release/datamapper
 ```
 
-The server listens on `0.0.0.0:3000` by default (change with the
-`port:` field in `datamapper.yaml`).
+The server listens on `0.0.0.0:3000` by default. Change the port
+via any of the following (highest precedence first):
+
+1. `port:` in `datamapper.yaml` (if the file exists on the search
+   path).
+2. `PORT` environment variable — supported for compatibility with
+   JS DataMapper deployments (`PORT=8181 ./target/release/datamapper`).
+3. Falls back to `3000`.
 
 ## 2. Verify it's alive
 

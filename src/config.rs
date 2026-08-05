@@ -90,7 +90,7 @@ impl AppConfig {
     /// took effect.
     ///
     /// Post-load, `PORT` env var (JS DataMapper compat, see
-    /// `REFACTO-AUDIT-S2.md` F-01 / D-001) overrides the loaded/default
+    /// `book/src/porting-from-js.md`) overrides the loaded/default
     /// `port` field when the loaded config did not explicitly set it.
     /// The explicit-set signal is: config file present AND contains
     /// a `port:` key.

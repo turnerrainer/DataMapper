@@ -13,9 +13,11 @@ field in the JSON body is the stable machine identifier;
 | 404 | `TemplateNotFound` | No file at either candidate path. Body includes `tried: [<paths>]`. | Confirm the template exists at `DSL/<project>/<view>.hbs` or `DSL/<project>/hbs/<view>.hbs`. |
 | 405 | `MethodNotAllowed` | POST on `/healthz` or `/health`, or non-POST on `/<project>/*`. | Use `GET`/`HEAD` for health, `POST` for template routes. |
 | 413 | `RequestTooLarge` | Body exceeded `limits.max_request_bytes`. Body includes `limit: <bytes>`. | Shrink the payload or raise the cap in `datamapper.yaml`. |
+| 415 | `UnsupportedContentType` | Request body was non-empty but Content-Type is not `application/json`, `text/json`, or `application/…+json`. Common trigger: `application/x-www-form-urlencoded`. The offending type is echoed in `message`. | Post JSON with `Content-Type: application/json`. See [Porting from JS DataMapper §3](./porting-from-js.md#request-content-type). |
 | 500 | `TemplateRenderError` | Handlebars failed to render. Body includes `view: <path>`. | Fix the template. Common causes: missing helper, typo in a `{{#if}}` block. |
 | 500 | `ResponseTooLarge` | Rendered output exceeded `limits.max_response_bytes`. Body includes `limit: <bytes>`. | Fix the template (template amplification) or raise the cap. |
 | 500 | `Internal` | Unexpected server-side error — I/O reading the template, config parse failure at startup, etc. | Check server logs (`RUST_LOG=debug` for detail). |
+| 504 | *(no `error` code — empty body)* | Render call exceeded `limits.request_timeout_secs`. | Fix the template (runaway recursion, extreme nesting) or raise the cap. |
 
 ## Response body shape
 
