@@ -1,0 +1,8 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/objects/select_fields   -H 'Content-Type: application/json' -H 'type: json'   -d '{"user":{"id":10,"first":"Ava","last":"Stone"},"role":"admin"}'
+--}}
+{
+  "id": {{#if user.id}}{{user.id}}{{else}}0{{/if}},
+  "fullName": "{{#if user.first}}{{user.first}}{{else}}Unknown{{/if}} {{#if user.last}}{{user.last}}{{else}}User{{/if}}",
+  "role": "{{#if role}}{{role}}{{else}}guest{{/if}}"
+}

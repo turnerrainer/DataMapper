@@ -1,0 +1,9 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/users/patch   -H 'Content-Type: application/json' -H 'type: json'   -d '{"id":123,"username":"trinity"}'
+--}}
+{
+  "id": {{id}}{{#if username}},
+  "username": "{{username}}"{{/if}}{{#if email}}{{#if username}},{{/if}}
+  "email": "{{email}}"{{/if}}{{#if active}}{{#if username}}{{else}}{{#if email}},{{/if}}{{/if}}
+  "active": {{active}}{{/if}}
+}

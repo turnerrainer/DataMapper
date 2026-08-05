@@ -1,0 +1,7 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/conditionals/include_optional   -H 'Content-Type: application/json' -H 'type: json'   -d '{"email":"a@x.io"}'
+--}}
+{
+  {{#if phone}}"phone": "{{phone}}"{{#if email}},{{/if}}{{/if}}{{#if email}}
+  "email": "{{email}}"{{/if}}{{#unless phone}}{{#unless email}} "note": "no contact details provided"{{/unless}}{{/unless}}
+}

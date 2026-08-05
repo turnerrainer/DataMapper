@@ -1,30 +1,58 @@
 # HANDOFF
 
-**Written**: 2026-07-29
-**Last verified green**: 2026-07-31 — `v0.1.0-alpha.1` published.
-Local verification set clean: `cargo fmt --check`,
+**Written**: 2026-07-29 · **Last updated**: 2026-08-05.
+**Last verified green**: 2026-08-05 — `v0.1.0-alpha.2` (JS-source
+compat pass). Local verification set clean: `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`
-(24 unit + 16 integration = 40/0/0), `cargo audit --deny warnings`,
-`cargo deny check all`, `mdbook build book` (mdbook 0.4.40 +
-linkcheck 0.7.7). Remote `tests`, `security`, `docs` CI green on
-`dev`. `publish.yml` green on tag push: multi-arch build (amd64 +
-arm64), Trivy scan clean, per-arch `/healthz` smoke passed, cosign
-keyless signatures on both registries. Fresh unauthenticated
-`docker pull` + `/healthz` + `samples/ping` verified on both
-`docker.io/turnerrainer/datamapper:0.1.0-alpha.1` and
-`ghcr.io/turnerrainer/datamapper:0.1.0-alpha.1`.
+(24 unit + 16 e2e + 17 regression + 1 compat corpus + 1 cross-impl
+repro = 59/0/0), `cargo audit --deny warnings`, `cargo deny check all`,
+`mdbook build book` (mdbook 0.4.40 + linkcheck 0.7.7).
 **Branch**: `dev` — pushed to `origin` at
 <https://github.com/turnerrainer/datamapper>.
-**Release**: `v0.1.0-alpha.1` — tagged, pushed, published.
+**Releases**:
+- `v0.1.0-alpha.2` — tagged, pushed, published under `:alpha` floating tag on Docker Hub + GHCR.
+- `v0.1.0-alpha.1` — tagged, pushed, published (2026-07-31).
 
 Next contributor (human or Claude) must:
 
 1. Read [`../DEV-REQUIREMENTS.md`](../DEV-REQUIREMENTS.md)
    front-to-back before touching anything. That's the
    authoritative ruleset for all Buerostack Rust projects.
-2. Read this file for DataMapper-specific state.
-3. Read [`docs/DESIGN.md`](./docs/DESIGN.md) for domain shape.
-4. Run the verification set (below) — every command exits 0.
+2. Read [`../REFACTO-REQUIREMENTS.md`](../REFACTO-REQUIREMENTS.md) —
+   this repo is a reimplementation, so the refacto ruleset applies
+   on top of the base ruleset.
+3. Read this file for DataMapper-specific state.
+4. Read [`docs/DESIGN.md`](./docs/DESIGN.md) for domain shape.
+5. Read the JS→Rust porting summary at
+   [`book/src/porting-from-js.md`](./book/src/porting-from-js.md) —
+   what a JS DataMapper operator needs to know.
+6. Consult the in-house refacto paperwork (kept LOCAL, gitignored):
+   `DIVERGENCES.md`, `MIGRATION.md`, `REFACTO-DEVIATIONS.md`,
+   `docs/REFACTO-MATRIX.md`, `docs/REFACTO-PORT-PLAN.md`,
+   `docs/REFACTO-AUDIT-S2.md`,
+   `docs/REFACTO-AUDIT-NEGATIVE-SPACE.md`. These live under
+   `Buerostack/DataMapper-on-Rust/` on the maintainer's disk but
+   are NOT committed to the public repo.
+7. Run the verification set (below) — every command exits 0.
+
+## REFACTO-REQUIREMENTS compliance
+
+Compliance landed as of `v0.1.0-alpha.2` on `2026-08-05`.
+Enforcement is in-tree:
+
+| §-ref | How enforced (public) |
+|---|---|
+| §1.1 coverage matrix | In-house `docs/REFACTO-MATRIX.md` (gitignored). |
+| §1.3 test-corpus port plan | In-house `docs/REFACTO-PORT-PLAN.md` (gitignored). |
+| §2 audit (contract preservation) | In-house `docs/REFACTO-AUDIT-S2.md` (gitignored). |
+| §8.3 negative-space audit | In-house `docs/REFACTO-AUDIT-NEGATIVE-SPACE.md` (gitignored). |
+| §5 divergences | In-house `DIVERGENCES.md` (gitignored). Public summary in `book/src/porting-from-js.md`. |
+| §7.2 migration guide | In-house `MIGRATION.md` (gitignored). Public summary in `book/src/porting-from-js.md`. |
+| §10.2 known deviations from REFACTO-REQUIREMENTS | In-house `REFACTO-DEVIATIONS.md` (gitignored). |
+| §7.3 syntactic corpus | Public: `compat/js-DSL/`. |
+| §7.3 CI gate on that corpus | Public: `tests/it_compat_js_dsl_corpus.rs`. |
+| §4.3 cross-impl repro | Public: `tests/it_repro_cross_impl.rs`, `compat/js-server/` + `scripts/setup-repro.sh`. |
+| §4.4 regression tests | Public: `tests/it_regression_refacto.rs`. |
 
 ## What this repo IS today
 

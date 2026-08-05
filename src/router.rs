@@ -87,6 +87,34 @@ async fn invoke(
         .into_response();
     }
 
+    // R2.5 / D-007: JS DataMapper's `express.urlencoded` accepted
+    // form-encoded bodies. Rust intentionally rejects them, but
+    // with a specific 415 UnsupportedContentType naming the type
+    // so the operator pinpoints the mismatch instead of parsing a
+    // misleading `InvalidJson` message.
+    //
+    // Policy:
+    //   - Empty body → skip the check (JS parity: `ping` with no body).
+    //   - No Content-Type header → skip (client probably sent JSON).
+    //   - `application/json`, `text/json`, `application/…+json` → allow.
+    //   - Everything else → 415 naming the type.
+    if !body.is_empty() {
+        if let Some(ct) = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+        {
+            let lower = ct.to_ascii_lowercase();
+            let media = lower.split(';').next().unwrap_or("").trim();
+            let json_shaped = media == "application/json"
+                || media == "text/json"
+                || media.ends_with("+json")
+                || media.is_empty();
+            if !json_shaped {
+                return DataMapperError::UnsupportedContentType(media.to_string()).into_response();
+            }
+        }
+    }
+
     // Parse the body as JSON — DataMapper's contract is JSON in,
     // rendered output out. Empty body is treated as `{}` so simple
     // DSLs like `ping` work without a client having to send `{}`.

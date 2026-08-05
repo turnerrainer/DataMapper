@@ -1,0 +1,8 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/users/create   -H 'Content-Type: application/json' -H 'type: json'   -d '{"username":"neo","email":"neo@example.com"}'
+--}}
+{
+  "username": "{{username}}",
+  "email": "{{email}}",
+  "active": {{#if active}}{{active}}{{else}}true{{/if}}
+}

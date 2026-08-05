@@ -1,0 +1,13 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/arrays/map_products   -H 'Content-Type: application/json' -H 'type: json'   -d '{"products":[{"sku":"A1","name":"Widget","price":19.9},{"sku":"B2","name":"Gadget","price":29.5}]}'
+--}}
+{
+  "items": [
+    {{#each products}}{{#if @index}},{{/if}}{
+      "sku": "{{this.sku}}",
+      "title": "{{this.name}}",
+      "price": {{this.price}}
+    }{{/each}}
+  ],
+  "total": {{#if products}}{{products.length}}{{else}}0{{/if}}
+}

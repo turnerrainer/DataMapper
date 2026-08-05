@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: datamapper:0.1.0-alpha.1
+    image: datamapper:0.1.0-alpha.2
     container_name: datamapper
     ports:
       - "3000:3000"

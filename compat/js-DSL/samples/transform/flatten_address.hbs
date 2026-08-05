@@ -1,0 +1,13 @@
+{{!--
+curl -sS -X POST http://localhost:3000/samples/transform/flatten_address   -H 'Content-Type: application/json' -H 'type: json'   -d '{"user":{"id":7,"name":"Ava","address":{"street":"Main 1","city":"Tallinn","postal":"10115","country":"EE"}}}'
+--}}
+{
+  "id": {{user.id}},
+  "name": "{{user.name}}",
+  {{#with user.address}}
+  "street": "{{street}}",
+  "city": "{{city}}",
+  "zip": "{{postal}}",
+  "country": "{{country}}"
+  {{/with}}
+}
