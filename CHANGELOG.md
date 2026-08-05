@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Compatibility work against the JS `Buerostack/DataMapper` `v1.0.0`
 (`2025-09-24`) source of truth so existing JS deployments and DSLs
 port zero-touch. Full porting summary in
-[`book/src/porting-from-js.md`](./book/src/porting-from-js.md).
+[Porting from JS DataMapper](../porting-from-js.md) on the docs site.
 
 - **`PORT` env var honoured as fallback** when the loaded config
   does not explicitly set `port:`. Fixes a silent config drop for
@@ -46,16 +46,16 @@ port zero-touch. Full porting summary in
 
 ### Docs
 
-- **`book/src/porting-from-js.md`** — public JS→Rust porting summary.
-- **`book/src/samples.md`** — walkthrough of every sample DSL with
-  the exact curl command and expected response.
-- **`book/src/handlebars-helpers.md`** — dedicated helper reference
-  with runnable examples, including migration notes.
-- **`book/src/configuration.md`** — expanded to cover `PORT` env var,
+- New docs page: JS→Rust porting summary.
+- New docs page: walkthrough of every sample DSL with the exact
+  curl command and expected response.
+- New docs page: dedicated Handlebars-helper reference with
+  runnable examples, including migration notes.
+- Expanded configuration reference to cover `PORT` env var,
   auto-rewrite behaviour, and every boot-log line an operator will
   see.
-- **`book/src/failure-modes.md`** — adds `UnsupportedContentType`
-  row.
+- Failure-modes reference gains `UnsupportedContentType` (415) and
+  `RequestTimeout` (504) rows.
 
 ### Test coverage
 

@@ -12,43 +12,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added — JS-source-of-truth compatibility
 
 Compatibility work against the JS `Buerostack/DataMapper` `v1.0.0`
-source of truth so existing JS deployments and DSLs port zero-touch.
-Full porting summary in [Porting from JS DataMapper](../porting-from-js.md).
+(`2025-09-24`) source of truth so existing JS deployments and DSLs
+port zero-touch. Full porting summary in
+[Porting from JS DataMapper](../porting-from-js.md) on the docs site.
 
-- **`PORT` env var honoured as fallback** when the loaded config does
-  not explicitly set `port:`.
-- **Auto-rewrite of the JS `.length` accessor** at template-load time:
-  `{{arr.length}}` → `{{len arr}}` and `{{#if arr.length}}` →
-  `{{#if arr}}`. Warn per affected template. Ported JS DSLs render
-  correctly without hand-editing.
-- **`415 UnsupportedContentType`** for non-JSON bodies, naming the
-  offending Content-Type.
-- **Boot `warn!`** if `.hbs` files still live under `./views/`.
-- **Boot INFO** listing templates still using the JS `.length`
-  accessor.
-- **JS-compat single-line boot log**
-  (`DataMapper listening on :<port>`) alongside structured tracing.
+- **`PORT` env var honoured as fallback** when the loaded config
+  does not explicitly set `port:`. Fixes a silent config drop for
+  operators lifting JS docker-compose / systemd unit files.
+- **Auto-rewrite of the JS `.length` accessor**: `{{arr.length}}` is
+  rewritten to `{{len arr}}` and `{{#if arr.length}}` to
+  `{{#if arr}}` at load time, with a `warn!` per affected template.
+  Ported JS DSLs render correctly without hand-editing.
+- **`415 UnsupportedContentType`** for non-JSON request bodies,
+  naming the offending Content-Type in the JSON error body. Replaces
+  a misleading `400 InvalidJson` for form-encoded posts.
+- **Boot `warn!`** if `.hbs` files still live under `./views/` — the
+  JS-side legacy root Rust no longer serves from — so operators get
+  a single boot-log signal instead of silent 404s.
+- **Boot INFO** aggregating templates that still use the JS `.length`
+  accessor, so operators can prioritise migration work at a glance.
+- **JS-compat single-line boot log** —
+  `DataMapper listening on :<port>` — emitted on stdout alongside
+  the structured tracing output. Log-grep monitors carried over from
+  the JS deployment keep working.
 
 ### Changed
 
-- `#[serde(deny_unknown_fields)]` on `AppConfig` and `Limits` — a
-  typo'd YAML field now hard-fails at parse.
-- `UnsupportedContentType(String)` added to `DataMapperError`, mapped
-  to HTTP 415.
+- **`#[serde(deny_unknown_fields)]`** on `AppConfig` and `Limits`
+  structs — a typo'd YAML field now hard-fails at parse instead of
+  silently no-op'ing.
+- **`UnsupportedContentType(String)`** added to `DataMapperError`,
+  mapped to HTTP 415.
 
 ### Docs
 
-- New page: [Porting from JS DataMapper](../porting-from-js.md).
-- New page: [Handlebars helpers](../handlebars-helpers.md).
-- New page: [Sample DSLs](../samples.md).
-- Expanded [Configuration](../configuration.md) with boot-log
-  diagnostics, `PORT` env var, and runnable config samples.
-- Expanded [Failure modes](../failure-modes.md) with 415 + 504 rows.
+- New docs page: JS→Rust porting summary.
+- New docs page: walkthrough of every sample DSL with the exact
+  curl command and expected response.
+- New docs page: dedicated Handlebars-helper reference with
+  runnable examples, including migration notes.
+- Expanded configuration reference to cover `PORT` env var,
+  auto-rewrite behaviour, and every boot-log line an operator will
+  see.
+- Failure-modes reference gains `UnsupportedContentType` (415) and
+  `RequestTimeout` (504) rows.
 
 ### Test coverage
 
-- 40 → 59 tests (24 unit + 16 e2e + 17 regression + 1 compat corpus
-  + 1 cross-impl repro).
+- Baseline: 40 tests (24 unit + 16 e2e).
+- Post-alpha.2: 59 tests (24 unit + 16 e2e + 17 regression + 1
+  compat corpus + 1 cross-impl repro).
+
+### Known gaps
+
+- Timestamp format from `{{now}}` still uses `+00:00` and
+  nanosecond precision (JS uses `Z` and millisecond).
+- Default `max_request_bytes` still 2 MiB binary (JS was 2 000 000
+  decimal).
+- Cross-impl repro test needs a staged `compat/js-server/` — see
+  `scripts/setup-repro.sh`.
 
 ## [0.1.0-alpha.1] - 2026-07-29
 
