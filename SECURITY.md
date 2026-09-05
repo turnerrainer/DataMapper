@@ -70,6 +70,14 @@ Every rule below is documented in [`STANDARDS.md`](./STANDARDS.md).
 - **Non-root container user** (uid 1000), read-only rootfs,
   `cap_drop: ALL`, `no-new-privileges: true` in the shipped
   `docker-compose.yml`.
+- **DSL tree mounted read-only.** The shipped compose file mounts
+  the DSL directory with `:ro`. A writable DSL mount is a hard
+  no-go in production: an attacker with filesystem write (via any
+  other compromise on the host) could swap a `.hbs` for a symlink
+  to any file the DataMapper process can read (classic TOCTOU).
+  DataMapper emits a boot-time WARN naming the offending path if
+  it can create a probe file under the DSL root — the WARN is not
+  a substitute for the correct mount posture.
 
 ## Application-layer defensive posture
 

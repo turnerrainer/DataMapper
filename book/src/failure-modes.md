@@ -36,6 +36,28 @@ Extra fields present depending on the variant:
 - `limit: <bytes>` — on `RequestTooLarge` / `ResponseTooLarge`.
 - `view: <path>` — on `TemplateRenderError`.
 
+## Response `Content-Type` on non-error responses
+
+Success (`200`) responses negotiate their `Content-Type` in this
+order:
+
+1. If the client signalled a JSON preference (`type: json` header,
+   `Accept: application/json`, or `Accept: */*`) → try to parse the
+   rendered output as JSON; on success serve as `application/json`,
+   on failure serve raw with `application/json` still set.
+2. Otherwise, if the rendered output parses as JSON →
+   `application/json`.
+3. Otherwise, if the client explicitly sent `Accept: text/html` →
+   `text/html; charset=utf-8`.
+4. Otherwise → `text/plain; charset=utf-8`.
+
+Step 4 is the M2 defence: a mis-authored template whose output is
+not valid JSON, served to a client that did not opt in to HTML,
+lands as `text/plain` so a browser cannot execute any markup that
+leaked into the response. Templates whose author intends HTML
+should force the correct `Content-Type` at the reverse proxy, or
+their callers should send `Accept: text/html` explicitly.
+
 ## What DataMapper deliberately does NOT do on failure
 
 - **Retry.** DataMapper is stateless and idempotent — retry policy
