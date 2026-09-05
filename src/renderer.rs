@@ -17,6 +17,7 @@ use crate::error::DataMapperError;
 use crate::helpers;
 use handlebars::Handlebars;
 use serde_json::Value;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub struct Renderer {
@@ -39,15 +40,26 @@ impl Renderer {
     /// Resolve `<project>/<view>` under the DSL root, render against
     /// `context`, and return the rendered string.
     ///
+    /// `response_cap` is enforced **mid-render** via [`CappedWriter`]:
+    /// a template that would otherwise amplify (`{{#each}}` over
+    /// caller-supplied arrays, nested loops, etc.) errors out with
+    /// [`DataMapperError::ResponseTooLarge`] as soon as the buffer
+    /// crosses the cap, instead of allocating the full output first
+    /// and failing the check post-hoc (h2ck.me v1 M3). Pass
+    /// `usize::MAX` to opt out of the cap for callers that already
+    /// bound the input another way.
+    ///
     /// Returns:
     /// * `TemplateNotFound` if neither candidate exists on disk.
     /// * `InvalidPath` if any segment fails traversal guards.
     /// * `TemplateRenderError` if Handlebars fails to render.
+    /// * `ResponseTooLarge` if the render would exceed `response_cap`.
     pub fn render(
         &self,
         project: &str,
         view: &str,
         context: &Value,
+        response_cap: usize,
     ) -> Result<String, DataMapperError> {
         let project = sanitize_segment(project)?;
         let view = sanitize_segment(&strip_hbs(view))?;
@@ -99,12 +111,98 @@ impl Renderer {
             raw
         };
 
-        self.reg
-            .render_template(&body, context)
-            .map_err(|e| DataMapperError::TemplateRenderError {
-                view: view_label,
-                message: e.to_string(),
-            })
+        let mut writer = CappedWriter::new(response_cap);
+        match self
+            .reg
+            .render_template_to_write(&body, context, &mut writer)
+        {
+            Ok(()) => Ok(writer.into_string()),
+            Err(e) => {
+                if writer.cap_hit {
+                    Err(DataMapperError::ResponseTooLarge {
+                        limit: response_cap,
+                    })
+                } else {
+                    Err(DataMapperError::TemplateRenderError {
+                        view: view_label,
+                        message: e.to_string(),
+                    })
+                }
+            }
+        }
+    }
+}
+
+/// A `std::io::Write` sink that refuses to buffer past `cap` bytes.
+///
+/// Wraps the render path so an amplification-style template
+/// (`{{#each}}` over a huge caller-supplied array; nested loops
+/// over MiB-sized strings) is aborted mid-render instead of running
+/// to completion and only *then* being rejected by a post-render
+/// size check. Prevents the transient GiB-scale allocation that a
+/// naive `render_template()` → check-length pipeline is vulnerable
+/// to (h2ck.me v1 M3).
+///
+/// On the first write that would cross `cap`, sets the `cap_hit`
+/// flag, appends what fits (so callers can inspect the truncated
+/// prefix if they want), and returns `ErrorKind::WriteZero`. The
+/// handlebars-rust render loop surfaces the write error as a
+/// `RenderError`; the caller distinguishes cap-exceeded from
+/// arbitrary render failure by inspecting `cap_hit`.
+pub(crate) struct CappedWriter {
+    buf: Vec<u8>,
+    cap: usize,
+    cap_hit: bool,
+}
+
+impl CappedWriter {
+    /// Initial buffer capacity of 4 KiB — most rendered payloads
+    /// fit in a page and avoids re-allocating for the common case.
+    /// Bounded by `cap` so callers that ask for `cap = 128` don't
+    /// still allocate 4 KiB up front.
+    fn new(cap: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(cap.min(4096)),
+            cap,
+            cap_hit: false,
+        }
+    }
+
+    /// Consume the writer and return the accumulated bytes as a
+    /// `String`. Handlebars-rust guarantees the writer only sees
+    /// valid UTF-8 (it drives the writer with `write_str` internally),
+    /// so this replaces invalid sequences defensively rather than
+    /// unwrapping — a broken renderer must not be able to panic the
+    /// request path.
+    fn into_string(self) -> String {
+        String::from_utf8(self.buf)
+            .unwrap_or_else(|e| String::from_utf8_lossy(&e.into_bytes()).into_owned())
+    }
+}
+
+impl Write for CappedWriter {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        // saturating_add so a pathological `cap = usize::MAX`
+        // caller can't underflow the comparison; if we're already
+        // at the cap, `remaining` is zero and we short-circuit.
+        let projected = self.buf.len().saturating_add(data.len());
+        if projected > self.cap {
+            let remaining = self.cap.saturating_sub(self.buf.len());
+            if remaining > 0 {
+                self.buf.extend_from_slice(&data[..remaining]);
+            }
+            self.cap_hit = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "response cap exceeded mid-render",
+            ));
+        }
+        self.buf.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

@@ -14,8 +14,11 @@
 //!   parse the rendered output as JSON and send as `application/json`.
 //!   Fall back to raw with `application/json` MIME if parse fails.
 //! * Otherwise, opportunistically parse as JSON; on success send
-//!   JSON, on failure send as `text/html` (backwards compatible with
-//!   the original Node.js server).
+//!   JSON, on failure send raw. The fallback `Content-Type` is
+//!   `text/html` **only** when the client explicitly signalled
+//!   `Accept: text/html`; otherwise `text/plain; charset=utf-8` is
+//!   used so a mis-authored template can't hand attacker-influenced
+//!   bytes to a browser as executable markup (h2ck.me v1 M2).
 
 use crate::error::DataMapperError;
 use crate::renderer::Renderer;
@@ -127,24 +130,26 @@ async fn invoke(
         }
     };
 
-    let rendered = match state.renderer.render(&project, &view, &context) {
+    // Cap enforcement lives inside the renderer (h2ck.me v1 M3):
+    // `Renderer::render` streams into a `CappedWriter` and returns
+    // `ResponseTooLarge` the moment the buffer would cross the
+    // limit, so an amplification template can't briefly allocate
+    // multiples of the cap before we notice.
+    let rendered = match state
+        .renderer
+        .render(&project, &view, &context, state.max_response_bytes)
+    {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
 
-    if rendered.len() > state.max_response_bytes {
-        return DataMapperError::ResponseTooLarge {
-            limit: state.max_response_bytes,
-        }
-        .into_response();
-    }
-
     let prefers_json = wants_json(&headers);
-    respond(rendered, prefers_json)
+    let accepts_html = accepts_html(&headers);
+    respond(rendered, prefers_json, accepts_html)
 }
 
 /// Response negotiation policy — see module doc.
-fn respond(rendered: String, prefers_json: bool) -> Response {
+fn respond(rendered: String, prefers_json: bool, accepts_html: bool) -> Response {
     if prefers_json {
         return match serde_json::from_str::<Value>(&rendered) {
             Ok(v) => (StatusCode::OK, axum::Json(v)).into_response(),
@@ -157,17 +162,33 @@ fn respond(rendered: String, prefers_json: bool) -> Response {
         };
     }
     // Client did not signal JSON preference — opportunistically
-    // detect JSON output and upgrade the MIME. Falls back to HTML
-    // (compat with original DataMapper Node.js behaviour).
+    // detect JSON output and upgrade the MIME. On non-JSON output
+    // the fallback is `text/html` **only** when the caller
+    // explicitly asked for it via `Accept: text/html`; otherwise
+    // `text/plain` so a template author's mistake can't feed
+    // attacker-influenced markup to a browser (h2ck.me v1 M2).
     match serde_json::from_str::<Value>(&rendered) {
         Ok(v) => (StatusCode::OK, axum::Json(v)).into_response(),
-        Err(_) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            rendered,
-        )
-            .into_response(),
+        Err(_) => {
+            let ct = if accepts_html {
+                "text/html; charset=utf-8"
+            } else {
+                "text/plain; charset=utf-8"
+            };
+            (StatusCode::OK, [(header::CONTENT_TYPE, ct)], rendered).into_response()
+        }
     }
+}
+
+/// True iff the client explicitly listed `text/html` in `Accept`.
+/// A missing header, `*/*`, or an unrelated MIME does NOT count —
+/// see the M2 rationale in the module doc.
+pub fn accepts_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_ascii_lowercase().contains("text/html"))
+        .unwrap_or(false)
 }
 
 /// True if the request signals a JSON preference:
@@ -244,5 +265,29 @@ mod tests {
     #[test]
     fn wants_json_false_when_type_is_other() {
         assert!(!wants_json(&hdrs(&[("type", "xml")])));
+    }
+
+    #[test]
+    fn accepts_html_only_when_explicitly_requested() {
+        assert!(accepts_html(&hdrs(&[("accept", "text/html")])));
+        assert!(accepts_html(&hdrs(&[(
+            "accept",
+            "text/html,application/xhtml+xml"
+        )])));
+        // Explicit browser-style Accept still counts.
+        assert!(accepts_html(&hdrs(&[(
+            "accept",
+            "text/html;q=0.9,application/json;q=0.1"
+        )])));
+    }
+
+    #[test]
+    fn accepts_html_false_for_wildcard_and_missing() {
+        // `*/*` alone must NOT be treated as an HTML opt-in — that
+        // was the M2 bug: browsers/proxies frequently send `*/*` and
+        // we'd otherwise fall through to `text/html`.
+        assert!(!accepts_html(&hdrs(&[("accept", "*/*")])));
+        assert!(!accepts_html(&hdrs(&[])));
+        assert!(!accepts_html(&hdrs(&[("accept", "application/json")])));
     }
 }

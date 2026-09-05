@@ -44,6 +44,16 @@ async fn main() -> anyhow::Result<()> {
     // accessor so operators know which files the compat rewriter is
     // fixing up under the hood.
     warn_on_ported_js_dsl_syntax(&cfg.dsl_path);
+    // h2ck.me v1 L1 — DSL root MUST be read-only in production.
+    // A writable mount lets a filesystem-writer replace a `.hbs`
+    // with a symlink to any file the process can read (classic
+    // TOCTOU / symlink swap between our loader's stat and the
+    // subsequent `read_to_string`). The shipped compose file
+    // already mounts `DSL:/app/DSL:ro`; this WARN catches operators
+    // who deviated. Doesn't refuse-to-start — dev loops legitimately
+    // want a writable tree — but names the path so the deviation
+    // shows up in the boot log.
+    warn_on_writable_dsl_root(&cfg.dsl_path);
 
     let state = AppState {
         renderer: Arc::new(Renderer::new(cfg.dsl_path.clone())),
@@ -61,6 +71,73 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Emit a WARN if the DSL root — or any subdirectory beneath it —
+/// is writable by the current process UID. See L1 in `SECURITY.md`
+/// for the deployment posture this guards against.
+fn warn_on_writable_dsl_root(dsl_root: &std::path::Path) {
+    if !dsl_root.exists() {
+        return;
+    }
+    let mut writable_paths: Vec<String> = Vec::new();
+    for entry in walkdir::WalkDir::new(dsl_root)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        if is_writable_by_us(entry.path()) {
+            writable_paths.push(entry.path().display().to_string());
+        }
+        if writable_paths.len() >= 5 {
+            break;
+        }
+    }
+    if !writable_paths.is_empty() {
+        tracing::warn!(
+            "DSL root is writable by the DataMapper process ({}) — production deployments MUST mount the DSL tree read-only \
+             (compose: `DSL:/app/DSL:ro`) to defeat symlink-swap and TOCTOU attacks on template files. See SECURITY.md.",
+            writable_paths.join(", "),
+        );
+    }
+}
+
+/// Best-effort check: can this process write into `path`?
+/// Uses a probe file rather than reading mode bits so mount-level
+/// read-only overrides (Docker `:ro`) are honoured — a directory
+/// with `0755` mode bits still returns `false` when the underlying
+/// mount is read-only, which is the case we actually care about.
+#[cfg(unix)]
+fn is_writable_by_us(path: &std::path::Path) -> bool {
+    // Use a unique per-boot probe filename so two racing DataMapper
+    // instances (which they should never be, but still) don't clobber
+    // each other's probe.
+    let probe = path.join(format!(
+        ".datamapper-writable-probe-{}",
+        std::process::id()
+    ));
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_writable_by_us(_path: &std::path::Path) -> bool {
+    // Non-Unix targets are not a supported production posture for
+    // DataMapper (container-shipped, Linux only). Skip the probe
+    // rather than issuing a false alarm on Windows dev boxes.
+    false
 }
 
 fn warn_on_legacy_views_dir() {

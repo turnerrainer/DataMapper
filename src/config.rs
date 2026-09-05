@@ -100,6 +100,26 @@ impl AppConfig {
                 let body = std::fs::read_to_string(&path).map_err(|e| {
                     DataMapperError::Internal(format!("reading config {}: {}", path.display(), e))
                 })?;
+                // h2ck.me v1 I1 — DataMapper does NOT terminate CORS.
+                // Historically an operator could set `cors_origin: …`
+                // in their yaml and the server would silently drop it
+                // behind a boot WARN, which is the worst-of-both:
+                // browsers still block, operators think they've
+                // configured CORS, and the workaround they reach for
+                // is often unsafe (adding `crossorigin=anonymous`,
+                // hand-rolled `Access-Control-Allow-Origin: *`, etc.).
+                // Refuse to start instead so misconfiguration surfaces
+                // at boot with a clear pointer to the correct layer.
+                if let Some(line_no) = find_cors_origin_key(&body) {
+                    return Err(DataMapperError::Internal(format!(
+                        "config {} line {}: `cors_origin` is not implemented in this release — \
+                         DataMapper does not terminate CORS. Configure CORS at your reverse proxy \
+                         (nginx `add_header Access-Control-Allow-Origin`, Traefik middleware, etc.). \
+                         Remove the `cors_origin` key from the config to boot.",
+                        path.display(),
+                        line_no
+                    )));
+                }
                 let cfg: AppConfig = serde_yaml_ng::from_str(&body).map_err(|e| {
                     DataMapperError::Internal(format!("parsing config {}: {}", path.display(), e))
                 })?;
@@ -132,6 +152,29 @@ fn apply_port_env(mut cfg: AppConfig) -> AppConfig {
         }
     }
     cfg
+}
+
+/// Return the 1-based line number of a top-level `cors_origin:` key
+/// in the YAML text, or `None` if not present. Ignores commented
+/// lines and any occurrence inside a nested mapping (indented lines).
+///
+/// See M2 rationale on `AppConfig::load_or_default` — DataMapper
+/// intentionally refuses to boot when this key is set so silent
+/// drop behind a boot WARN cannot mislead operators.
+fn find_cors_origin_key(yaml: &str) -> Option<usize> {
+    for (idx, raw) in yaml.lines().enumerate() {
+        let no_indent = raw.trim_start();
+        if no_indent.starts_with('#') {
+            continue;
+        }
+        // Only match top-level keys (no leading whitespace) so a
+        // future `some_helper:\n  cors_origin: foo` inside an unrelated
+        // subtree doesn't false-positive.
+        if raw.starts_with("cors_origin:") || raw.starts_with("cors_origin ") {
+            return Some(idx + 1);
+        }
+    }
+    None
 }
 
 fn config_search_paths() -> Vec<PathBuf> {
@@ -205,5 +248,24 @@ limits:
         let yaml = "port: not-a-number\n";
         let result: Result<AppConfig, _> = serde_yaml_ng::from_str(yaml);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cors_origin_key_is_detected_at_top_level() {
+        assert_eq!(
+            find_cors_origin_key("port: 3000\ncors_origin: \"*\"\n"),
+            Some(2)
+        );
+        assert_eq!(find_cors_origin_key("cors_origin: foo\n"), Some(1));
+    }
+
+    #[test]
+    fn cors_origin_key_ignores_indented_and_commented_occurrences() {
+        assert_eq!(find_cors_origin_key("# cors_origin: foo\n"), None);
+        assert_eq!(
+            find_cors_origin_key("something:\n  cors_origin: nested\n"),
+            None
+        );
+        assert_eq!(find_cors_origin_key("port: 3000\n"), None);
     }
 }
