@@ -115,10 +115,7 @@ fn is_writable_by_us(path: &std::path::Path) -> bool {
     // Use a unique per-boot probe filename so two racing DataMapper
     // instances (which they should never be, but still) don't clobber
     // each other's probe.
-    let probe = path.join(format!(
-        ".datamapper-writable-probe-{}",
-        std::process::id()
-    ));
+    let probe = path.join(format!(".datamapper-writable-probe-{}", std::process::id()));
     match std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
