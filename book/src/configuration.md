@@ -213,4 +213,11 @@ The server continues to boot with the fallback port (either from
 | `Accept:` contains `application/json` | `application/json` |
 | `Accept:` contains `*/*` (no `text/html`) | `application/json` |
 | No JSON preference, output parses as JSON | `application/json` (opportunistic upgrade) |
-| No JSON preference, output does NOT parse as JSON | `text/html; charset=utf-8` |
+| No JSON preference, `Accept:` explicitly lists `text/html`, output does NOT parse as JSON | `text/html; charset=utf-8` |
+| No JSON preference, no `Accept: text/html` opt-in, output does NOT parse as JSON | `text/plain; charset=utf-8` |
+
+**The `text/html` fallback is explicit-opt-in as of `v0.1.3-alpha`**
+(h2ck.me v1 M2). `Accept: */*` and missing `Accept:` no longer
+count as an HTML opt-in — the fallback for those clients is
+`text/plain`, so an operator error page containing attacker-influenced
+input cannot be rendered as HTML by a wildcard-Accept client.

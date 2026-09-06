@@ -1,39 +1,45 @@
 # HANDOFF
 
-**Written**: 2026-07-29 · **Last updated**: 2026-08-05.
-**Last verified green**: 2026-08-05 — `v0.1.0-alpha.2` (JS-source
-compat pass). Local verification set clean: `cargo fmt --check`,
-`cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`
-(24 unit + 16 e2e + 17 regression + 1 compat corpus + 1 cross-impl
-repro = 59/0/0), `cargo audit --deny warnings`, `cargo deny check all`,
-`mdbook build book` (mdbook 0.4.40 + linkcheck 0.7.7).
-**Branch**: `dev` — pushed to `origin` at
-<https://github.com/turnerrainer/datamapper>.
+**Written**: 2026-07-29 · **Last updated**: 2026-09-07.
+**Last verified green**: 2026-09-07 — `v0.1.3-alpha` (h2ck.me v1
+security-hardening pass). Local verification set clean:
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test --no-fail-fast` (66/0/0). `cargo audit --deny warnings`
++ `cargo deny check all` + `mdbook build book` last confirmed
+against `v0.1.3-alpha` in CI (`security` + `docs` workflows on
+merge of PR #5).
+**Trunk**: `dev` — pushed to `origin` at
+<https://github.com/turnerrainer/datamapper>. There is no `main`
+branch on origin; releases tag off `dev`.
 **Releases**:
-- `v0.1.0-alpha.2` — tagged, pushed, published under `:alpha` floating tag on Docker Hub + GHCR.
+- `v0.1.3-alpha` — tagged, pushed, published under `:alpha` floating tag on Docker Hub + GHCR (2026-09-06).
+- `v0.1.0-alpha.2` — tagged, pushed, published (2026-08-05).
 - `v0.1.0-alpha.1` — tagged, pushed, published (2026-07-31).
 
 Next contributor (human or Claude) must:
 
-1. Read [`../DEV-REQUIREMENTS.md`](../DEV-REQUIREMENTS.md)
+1. Read [`CLAUDE.md`](./CLAUDE.md) first if you are an LLM —
+   it names the wire-visible deltas since alpha.2 and the
+   problematic-config crib, and is short.
+2. Read [`../DEV-REQUIREMENTS.md`](../DEV-REQUIREMENTS.md)
    front-to-back before touching anything. That's the
    authoritative ruleset for all Buerostack Rust projects.
-2. Read [`../REFACTO-REQUIREMENTS.md`](../REFACTO-REQUIREMENTS.md) —
+3. Read [`../REFACTO-REQUIREMENTS.md`](../REFACTO-REQUIREMENTS.md) —
    this repo is a reimplementation, so the refacto ruleset applies
    on top of the base ruleset.
-3. Read this file for DataMapper-specific state.
-4. Read [`docs/DESIGN.md`](./docs/DESIGN.md) for domain shape.
-5. Read the JS→Rust porting summary at
+4. Read this file for DataMapper-specific state.
+5. Read [`docs/DESIGN.md`](./docs/DESIGN.md) for domain shape.
+6. Read the JS→Rust porting summary at
    [`book/src/porting-from-js.md`](./book/src/porting-from-js.md) —
    what a JS DataMapper operator needs to know.
-6. Consult the in-house refacto paperwork (kept LOCAL, gitignored):
+7. Consult the in-house refacto paperwork (kept LOCAL, gitignored):
    `DIVERGENCES.md`, `MIGRATION.md`, `REFACTO-DEVIATIONS.md`,
    `docs/REFACTO-MATRIX.md`, `docs/REFACTO-PORT-PLAN.md`,
    `docs/REFACTO-AUDIT-S2.md`,
    `docs/REFACTO-AUDIT-NEGATIVE-SPACE.md`. These live under
    `Buerostack/DataMapper-on-Rust/` on the maintainer's disk but
    are NOT committed to the public repo.
-7. Run the verification set (below) — every command exits 0.
+8. Run the verification set (below) — every command exits 0.
 
 ## REFACTO-REQUIREMENTS compliance
 
@@ -67,10 +73,51 @@ endpoint that renders the template against the JSON request body.
 - Structured errors (413 request-too-large, 404 template-not-found,
   400 invalid JSON, 400 invalid path, 405 method-not-allowed)
 - 11 sample DSLs covering the common shaping patterns
-- 40 tests (24 unit + 16 integration), all green
+- 66 tests (19 e2e + 17 regression + 29 unit + 1 compat corpus + 1 cross-impl repro), all green on `v0.1.3-alpha`
 - Multi-stage Dockerfile with non-root user + read-only rootfs
 - Production-hardened `docker-compose.yml`
 - Four GitHub Actions workflows ready to run on first push
+
+## Wire-visible deltas since v0.1.0-alpha.2
+
+Read this before deploying `v0.1.3-alpha` over an existing
+alpha.2 install. Full write-up + code pointers in
+[`CLAUDE.md`](./CLAUDE.md#breaking-behaviour-deltas-since-v010-alpha2).
+
+1. **Non-JSON output fallback is now `text/plain; charset=utf-8`**
+   unless the client sent `Accept: text/html` explicitly. `*/*`
+   and missing `Accept:` no longer count. Was `text/html`
+   universally. Fixes a reflected-content-type vector on operator
+   error pages (h2ck.me M2).
+2. **`cors_origin:` in `datamapper.yaml` refuses to boot** with a
+   diagnostic naming the file:line. Was a silent no-op. Correct
+   fix is to terminate CORS at the reverse proxy (h2ck.me I1).
+3. **`limits.max_response_bytes` fires mid-render** via
+   `CappedWriter`. Amplification templates short-circuit at cap
+   size instead of allocating GiB before failing. If a legitimate
+   template renders bigger than the cap, raise the cap in yaml
+   (h2ck.me M3).
+4. **Writable DSL root emits boot WARN** listing the offending
+   directories. Does not refuse to start — dev loops want a
+   writable tree — but production compose files ship
+   `DSL:/app/DSL:ro` and any WARN in staging/prod means the
+   `:ro` was dropped (h2ck.me L1).
+
+## Best-practice / problematic-config crib
+
+Detailed table lives in
+[`CLAUDE.md`](./CLAUDE.md#best-practice-config-production).
+Quick sanity check on a fresh deployment:
+
+```bash
+docker compose up -d
+docker compose logs datamapper 2>&1 | grep -E 'WARN|ERROR'   # expect empty
+curl -fsS http://localhost:3000/healthz                       # expect 200 JSON
+docker exec datamapper touch /app/DSL/foo                     # expect "read-only file system"
+```
+
+If any of those diverges, cross-reference the "Problematic
+configs" table in [`CLAUDE.md`](./CLAUDE.md#problematic-configs--how-to-spot-them).
 
 ## Verification set (all should exit 0)
 
