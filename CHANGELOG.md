@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3-alpha] - 2026-09-06
+
+Security-hardening release addressing the h2ck.me v1 pre-publication
+audit (all 5 findings closed, ✅ pass verdict) plus a Dockerfile CVE
+sweep and CI-actions modernisation. No user-facing feature changes;
+DSL and HTTP surface are byte-identical to alpha.2.
+
+### Security
+
+- **M1 — HTML-safety guidance in templating docs**: new
+  `book/src/handlebars-helpers.md` section spelling out `{{expr}}`
+  (escaped, default) vs `{{{expr}}}` (raw) with an escape-behaviour
+  table, three bad/good pairs, and a rule for when raw is safe.
+- **M2 — `Accept`-negotiation is explicit-opt-in for HTML**: the
+  fallback response `Content-Type` defaults to `text/plain` unless
+  the request `Accept` header explicitly names `text/html`. `*/*`
+  does **not** count as HTML opt-in. Fixes a
+  reflected-content-type vector on operator-hosted error pages.
+  Pinned by six regression tests.
+- **M3 — Response cap enforced mid-render**: new `CappedWriter` in
+  `src/renderer.rs` short-circuits Handlebars rendering the instant
+  the byte budget is exceeded, replacing the render-then-check path
+  that allowed transient GiB-scale allocations under an amplification
+  template. Pinned by a 32×32×1024-byte amplification test against
+  a 10 KiB cap.
+- **I1 — `cors_origin` refuses to boot**: setting the deprecated
+  `cors_origin` field in config now aborts startup with a diagnostic
+  naming the file:line and pointing at reverse-proxy CORS. Was a
+  silent no-op that could mislead operators.
+- **L1 — Boot-time DSL-writability probe**: `src/main.rs` performs
+  a `create_new` probe under `dsl_path` at startup and emits a
+  `WARN` if writable, catching bind-mount / read-only quirks that
+  `stat` alone misses. `SECURITY.md` updated with the hardening
+  rationale.
+
+### Changed
+
+- **Dockerfile base-image CVE sweep** (Snyk-driven, PR #2) —
+  reduces HIGH/CRITICAL findings so the publish workflow's Trivy
+  gate stays green.
+- **CI actions bumped to Node-24 majors** (`actions/checkout@v5`,
+  `actions/cache@v5`, `actions/upload-pages-artifact@v5`,
+  `actions/deploy-pages@v5`) — silences the runner's Node-20
+  deprecation warning and drops the compat-shim dependency.
+- **`chacha20` bumped 0.10.1 → 0.10.2** (0.10.1 was yanked).
+
+### Test coverage
+
+- 66 tests total (up from 59 in alpha.2): the seven added tests
+  pin the M2 explicit-opt-in behaviour and the M3 mid-render cap.
+- `cargo audit`, `cargo deny`, `cargo clippy -D warnings`, and
+  `cargo fmt --check` all clean.
+
 ## [0.1.0-alpha.2] - 2026-08-05
 
 ### Added — JS-source-of-truth compatibility
