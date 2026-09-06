@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "datamapper"
-version = "0.1.0-alpha.2"
+version = "0.1.3-alpha"
 dependencies = [
  "anyhow",
  "axum",
