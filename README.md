@@ -58,7 +58,6 @@ Full changelog: [`CHANGELOG.md`](./CHANGELOG.md).
 - **Book** — [turnerrainer.github.io/datamapper](https://turnerrainer.github.io/datamapper/)
   (getting started, config, failure modes, JS→Rust porting)
 - **Design** — [`docs/DESIGN.md`](./docs/DESIGN.md) — what DataMapper does and why
-- **Handoff runbook** — [`HANDOFF.md`](./HANDOFF.md) — publishing steps, verification set, h2ck.me pipeline
 - **LLM contributor orientation** — [`CLAUDE.md`](./CLAUDE.md) — breaking-behaviour crib, best-practice configs, problematic-config triage
 - **Security posture** — [`SECURITY.md`](./SECURITY.md) — vulnerability reporting, supply-chain guardrails
 - **Standards** — [`STANDARDS.md`](./STANDARDS.md) — product identity + build/docs/test/publish rules

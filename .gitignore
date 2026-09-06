@@ -47,3 +47,10 @@ Thumbs.db
 /docs/REFACTO-PORT-PLAN.md
 /docs/REFACTO-AUDIT-S2.md
 /docs/REFACTO-AUDIT-NEGATIVE-SPACE.md
+
+# Internal maintainer handoff runbook. Contains publishing steps,
+# the h2ck.me pipeline description, and other operator-facing
+# context that is not intended for public consumption. Kept local
+# only; user-facing docs live in `README.md`, `CLAUDE.md`, and the
+# mdBook under `book/src/`.
+/HANDOFF.md

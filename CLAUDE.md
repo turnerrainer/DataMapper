@@ -197,7 +197,6 @@ verifying `accepts_html()` in isolation. Do the same.
 | Topic | File |
 |---|---|
 | Product identity + build/publish rules | [`STANDARDS.md`](./STANDARDS.md) |
-| Handoff runbook, publishing steps, h2ck.me pipeline | [`HANDOFF.md`](./HANDOFF.md) |
 | Security posture + supply-chain guardrails | [`SECURITY.md`](./SECURITY.md) |
 | Cross-project ruleset (authoritative) | `../DEV-REQUIREMENTS.md` (local-only) |
 | Refacto ruleset | `../REFACTO-REQUIREMENTS.md` (local-only) |
