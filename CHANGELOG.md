@@ -163,6 +163,7 @@ port zero-touch. Full porting summary in
   004 (JSON-schema validation), 005 (helper expansion) filed.
 - 24 unit + 16 integration tests, all green.
 
-[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.1.3-alpha...HEAD
+[0.1.3-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.3-alpha
 [0.1.0-alpha.2]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.1
