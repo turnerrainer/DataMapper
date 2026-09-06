@@ -144,6 +144,62 @@ For the full JS→Rust porting story, see
 
 ---
 
+## Security: HTML contexts
+
+`handlebars-rust` HTML-escapes any double-brace value automatically.
+Triple-brace values are emitted verbatim. That distinction is the
+single most important safety rail in DataMapper — get it wrong and
+a caller can put arbitrary markup, including `<script>`, into a
+response served as `text/html`.
+
+| Syntax | Escaping | Safe for HTML responses? |
+|---|---|---|
+| `{{value}}` | ✅ always escaped by handlebars-rust | ✅ yes |
+| `{{{value}}}` | ❌ never escaped | ⚠️ only via `{{{json …}}}` — see below |
+
+**Rules:**
+
+1. **Use `{{value}}` (double-brace) for every value derived from
+   the request body.** Handlebars-rust turns `<`, `>`, `&`, `"`
+   and `'` into their HTML entities before writing them to the
+   response, so a payload like
+   `{"userInput":"<script>steal()</script>"}` renders as
+   `&lt;script&gt;steal()&lt;/script&gt;` — the browser sees text,
+   not markup, and never executes the script.
+2. **Use `{{{value}}}` (triple-brace) *only* for the `{{{json …}}}`
+   helper**, whose output is a serialised JSON literal that must
+   not have its quotes escaped. Never emit a request-derived
+   string inside `{{{...}}}` in a template whose response is (or
+   may become) HTML.
+3. If your template *intends* to emit HTML at all, prefer to force
+   the response `Content-Type` at the reverse proxy (or make the
+   caller send `Accept: text/html` explicitly). DataMapper's
+   fallback `Content-Type` for non-JSON output is
+   `text/plain; charset=utf-8` unless the caller explicitly asks
+   for HTML — a `<script>` payload delivered as `text/plain` is
+   inert in a browser (see the M2 defence in
+   [Failure modes](./failure-modes.md)).
+
+**Bad — attacker-controlled markup, HTML response:**
+
+```handlebars
+<h1>Hello {{{userInput}}}</h1>
+```
+
+Given `{"userInput":"<script>fetch('//x')</script>"}` and a caller
+with `Accept: text/html`, the browser executes the script.
+
+**Good — same intent, escaped:**
+
+```handlebars
+<h1>Hello {{userInput}}</h1>
+```
+
+Renders as `<h1>Hello &lt;script&gt;…&lt;/script&gt;</h1>` — the
+name shows up as text and nothing else.
+
+---
+
 ## Combining helpers
 
 Helpers compose naturally with block helpers:

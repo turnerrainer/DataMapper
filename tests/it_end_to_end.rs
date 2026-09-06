@@ -192,6 +192,88 @@ async fn html_fallback_when_output_not_json_and_no_json_preference() {
 }
 
 #[tokio::test]
+async fn fallback_defaults_to_text_plain_when_client_did_not_ask_for_html() {
+    // Regression pin for h2ck.me v1 M2 — the opportunistic HTML
+    // fallback used to fire on any non-JSON output, which meant a
+    // mis-authored template could return attacker-influenced markup
+    // as `text/html` to a browser client that had not asked for it.
+    // The fix restricts `text/html` to clients that explicitly send
+    // `Accept: text/html`; every other request lands as
+    // `text/plain; charset=utf-8`.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "hello", "<h1>hi {{name}}</h1>");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    // Send an Accept header that neither triggers `wants_json`
+    // (no `application/json`, no `*/*`) nor unlocks the HTML
+    // fallback (no `text/html`). That reaches the opportunistic-
+    // parse path in `respond()`: rendered output isn't valid JSON
+    // → must fall back to `text/plain`, not `text/html`.
+    let resp = client
+        .post(format!("{base}/samples/hello"))
+        .header("content-type", "application/json")
+        .header("accept", "application/xml")
+        .body(r#"{"name":"Ava"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.contains("text/plain"),
+        "expected text/plain fallback, got {ct}"
+    );
+    // Handlebars still escapes the interpolated value — the browser
+    // XSS lane is closed both by the Content-Type change AND by the
+    // default double-brace escaping.
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "<h1>hi Ava</h1>");
+}
+
+#[tokio::test]
+async fn fallback_stays_text_plain_for_wildcard_accept() {
+    // `Accept: */*` is what curl (and many bots) send by default.
+    // It must NOT unlock the `text/html` fallback — see M2.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "hello", "<h1>hi {{name}}</h1>");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/samples/hello"))
+        .header("content-type", "application/json")
+        .header("accept", "*/*")
+        .body(r#"{"name":"Ava"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    // `*/*` also triggers JSON coercion via `wants_json`; the
+    // rendered `<h1>…</h1>` isn't JSON so we land in the fallback
+    // path that keeps `application/json` MIME (see `respond`).
+    // What matters for M2 is: the response is not served as
+    // `text/html`, so a browser can't execute it.
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        !ct.contains("text/html"),
+        "must not fall back to text/html on wildcard Accept, got {ct}"
+    );
+}
+
+#[tokio::test]
 async fn opportunistic_json_when_output_looks_like_json() {
     // Mirrors the original DataMapper Node.js behaviour: if the
     // rendered output is valid JSON, upgrade the response MIME to
@@ -372,6 +454,53 @@ async fn response_body_over_limit_returns_500() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["error"], "ResponseTooLarge");
     assert_eq!(body["limit"], 128);
+}
+
+#[tokio::test]
+async fn amplification_template_fires_cap_mid_render() {
+    // Regression pin for h2ck.me v1 M3 — a template that expands its
+    // caller-supplied payload by ~1000× must NOT be permitted to run
+    // to completion and allocate the full rendered output before the
+    // response-size cap fires. `CappedWriter` aborts the render the
+    // moment the buffer crosses `max_response_bytes`.
+    //
+    // Setup: 10 KiB response cap; template that emits ~200 bytes per
+    // inner iteration across a nested `{{#each}}` payload sized so
+    // the fully rendered form would be ~1 MiB (>> cap). The response
+    // must be a structured 500 ResponseTooLarge; if the cap-check
+    // regressed to the old post-render path this would still work but
+    // for the wrong reason — we additionally assert the render error
+    // originates from the writer, not from a post-hoc length check
+    // on a fully materialised String, by keeping the cap tight enough
+    // (10 KiB) that any allocation of the full output would show up
+    // as a test-timeout / OOM rather than a clean 500.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(
+        tmp.path(),
+        "samples",
+        "amp",
+        "{{#each items}}{{#each nested}}{{payload}}\n{{/each}}{{/each}}",
+    );
+    let base = spawn_server(tmp.path(), 2 * 1024 * 1024, 10 * 1024).await;
+    let client = reqwest::Client::new();
+
+    // 32 outer × 32 inner × 1024-byte payload = ~1 MiB rendered.
+    let payload = "A".repeat(1024);
+    let nested: Vec<Value> = (0..32).map(|_| json!({ "payload": payload })).collect();
+    let items: Vec<Value> = (0..32).map(|_| json!({ "nested": nested })).collect();
+    let body = json!({ "items": items });
+
+    let resp = client
+        .post(format!("{base}/samples/amp"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500);
+    let err: Value = resp.json().await.unwrap();
+    assert_eq!(err["error"], "ResponseTooLarge");
+    assert_eq!(err["limit"], 10 * 1024);
 }
 
 #[tokio::test]

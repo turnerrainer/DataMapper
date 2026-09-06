@@ -199,3 +199,51 @@ runbook for future releases. Subsequent releases are typically just
 | Private security disclosure | [`./SECURITY.md`](./SECURITY.md) |
 | CI workflows | [`.github/workflows/`](./.github/workflows/) |
 | Task tracking | [`./tasks/`](./tasks/) |
+
+---
+
+## h2ck.me security-audit pipeline
+
+**Added**: 2026-09-06. Describes the ongoing pre-publication security audit + fix + review flow with the `h2ckme` private GitHub org. If you land in this repo cold and see an open `fix/h2ck-v1-audit` PR, start here.
+
+### What it is
+
+h2ck.me runs a versioned audit → fix → validate cycle against every Bürostack-fleet service before it goes public. Each round is a `vN/` folder in the corresponding private repo under [`github.com/h2ckme`](https://github.com/h2ckme):
+
+- `vN/AUDIT.md` — findings by severity, file:line pointers, attack scenarios.
+- `vN/FIX-KIT.md` — runnable attack sandbox, diff-shaped fix code, per-finding acceptance criteria.
+- `vN/PR-REVIEWS/<pr-number>-<head-sha7>.md` — one per PR reviewed.
+
+**Fleet-wide index** — [`h2ckme/security-fleet` → `REVIEW-INDEX.md`](https://github.com/h2ckme/security-fleet/blob/main/REVIEW-INDEX.md).
+
+### Where feedback lives (hybrid pipeline as of 2026-09-06)
+
+1. **The open v1 audit PR carries a comment** starting with `## h2ck.me v1 review`.
+2. **Full per-PR write-up** at [`h2ckme/DataMapper-on-Rust/v1/PR-REVIEWS/`](https://github.com/h2ckme/DataMapper-on-Rust/tree/main/v1/PR-REVIEWS).
+3. **Audit + fix-kit context**: [`h2ckme/DataMapper-on-Rust/v1/AUDIT.md`](https://github.com/h2ckme/DataMapper-on-Rust/blob/main/v1/AUDIT.md) + [`v1/FIX-KIT.md`](https://github.com/h2ckme/DataMapper-on-Rust/blob/main/v1/FIX-KIT.md).
+
+**h2ckme access**: `git clone git@github.com:h2ckme/DataMapper-on-Rust.git` (private, read via org membership).
+
+### Open v1 PR on this repo
+
+| PR | Branch | Findings | h2ck.me verdict |
+|---|---|---|---|
+| [#3](https://github.com/turnerrainer/DataMapper/pull/3) | `fix/h2ck-v1-audit` | M1 HTML-safety docs, M2 `text/plain` fallback default, M3 cap-aware writer, I1 refuse-to-start on `cors_origin`, L1 writable-DSL WARN | ✅ pass (5 findings, 66/66 tests, `cargo audit` + `cargo deny` + `clippy -D warnings` clean) |
+
+### Standout in the fix
+
+The **`CappedWriter`** in `src/renderer.rs` handles cap enforcement mid-render (via `render_template_to_write`), replacing the buffer-then-check anti-pattern that allowed transient GiB-scale allocations. Edge-case handling is thoughtful: `saturating_add` for `cap = usize::MAX`, initial buffer bounded by `cap.min(4096)`, `into_string` uses `from_utf8_lossy` defensively so a hypothetical broken renderer can't panic the request path. h2ck.me flagged this as extraction candidate for a future `buerostack-security::render` crate.
+
+The **`accepts_html` is explicit-only** — `*/*` correctly does NOT count as HTML opt-in. This was the M2 bug; it's now regression-pinned with 3 positive + 3 negative tests.
+
+### Next action for a maintainer landing here
+
+1. **Open [PR #3](https://github.com/turnerrainer/DataMapper/pull/3)** and read the `## h2ck.me v1 review` comment.
+2. Follow the link for the acceptance-marker table + break-the-fix probes.
+3. **Merge** on your release cadence (verdict is ✅ pass; DataMapper stays 🟢 SHIP).
+4. Bump version + tag + push image.
+5. **Wait ~2 weeks**, then h2ck.me opens `v2/` as an adversarial re-audit.
+
+### h2ck.me does NOT touch this repo
+
+Explicit boundary: h2ck.me writes only to `h2ckme/*` (private org) + PR comment threads. It never pushes code, opens PRs, or edits files in `turnerrainer/*`.
