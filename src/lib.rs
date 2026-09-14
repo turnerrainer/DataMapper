@@ -7,6 +7,7 @@
 //! See `docs/DESIGN.md` for the domain overview and
 //! `book/src/introduction.md` for user-facing docs.
 
+pub mod access_log;
 pub mod config;
 pub mod error;
 pub mod helpers;

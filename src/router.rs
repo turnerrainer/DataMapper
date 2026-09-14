@@ -62,6 +62,11 @@ pub fn build(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(request_limit.saturating_add(4096))),
         )
         .layer(timeout_layer)
+        // Audit LOG-v1 FN-LOG-2: emit one INFO line per completed request
+        // for SOC2/ISO27001 access-log compliance. See src/access_log.rs.
+        .layer(axum::middleware::from_fn(
+            crate::access_log::access_log_middleware,
+        ))
         .with_state(state)
 }
 
