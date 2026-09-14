@@ -688,3 +688,154 @@ async fn u9_security_headers_do_not_clobber_handler_content_type() {
         "handler content-type was clobbered: {ct}"
     );
 }
+
+// ---------- FLEET §1.6 — W3C traceparent response header ----------
+
+#[tokio::test]
+async fn o1_every_response_carries_traceparent_headers() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client.get(format!("{base}/healthz")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .expect("traceparent header missing")
+        .to_str()
+        .unwrap()
+        .to_string();
+    // Shape: 00-<32 hex>-<16 hex>-01
+    let parts: Vec<&str> = tp.split('-').collect();
+    assert_eq!(parts.len(), 4, "traceparent must have 4 dashed parts: {tp}");
+    assert_eq!(parts[0], "00", "version must be 00");
+    assert_eq!(parts[1].len(), 32, "trace id must be 32 hex chars");
+    assert_eq!(parts[2].len(), 16, "span id must be 16 hex chars");
+    assert_eq!(parts[3], "01", "flags must be 01");
+
+    // x-trace-id mirrors the traceparent's trace id.
+    let xid = resp
+        .headers()
+        .get("x-trace-id")
+        .expect("x-trace-id header missing")
+        .to_str()
+        .unwrap();
+    assert_eq!(xid, parts[1], "x-trace-id must equal traceparent trace id");
+}
+
+#[tokio::test]
+async fn o1_inbound_traceparent_is_inherited() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let inbound_trace = "0af7651916cd43dd8448eb211c80319c";
+    let inbound = format!("00-{inbound_trace}-b7ad6b7169203331-01");
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("traceparent", &inbound)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let parts: Vec<&str> = tp.split('-').collect();
+    assert_eq!(
+        parts[1], inbound_trace,
+        "trace id must be inherited from inbound header, got: {tp}"
+    );
+    // Span id must be REGENERATED — this service's span, not the
+    // caller's.
+    assert_ne!(
+        parts[2], "b7ad6b7169203331",
+        "span id must be freshly generated, not echoed"
+    );
+}
+
+#[tokio::test]
+async fn o1_malformed_inbound_traceparent_gets_fresh_id() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("traceparent", "totally-malformed")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let parts: Vec<&str> = tp.split('-').collect();
+    // Fresh id — must be well-formed even though inbound was junk.
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[1].len(), 32);
+    assert!(parts[1].chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[tokio::test]
+async fn o1_all_zero_inbound_trace_id_rejected() {
+    // W3C spec reserves all-zeros trace id as invalid.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header(
+            "traceparent",
+            "00-00000000000000000000000000000000-b7ad6b7169203331-01",
+        )
+        .send()
+        .await
+        .unwrap();
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let parts: Vec<&str> = tp.split('-').collect();
+    assert_ne!(
+        parts[1], "00000000000000000000000000000000",
+        "all-zeros trace id must be rejected and regenerated: {tp}"
+    );
+}
+
+#[tokio::test]
+async fn o1_traceparent_present_on_error_response_too() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/nonexistent/view"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert!(
+        resp.headers().get("traceparent").is_some(),
+        "traceparent missing on error response"
+    );
+    assert!(
+        resp.headers().get("x-trace-id").is_some(),
+        "x-trace-id missing on error response"
+    );
+}
