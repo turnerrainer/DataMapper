@@ -135,21 +135,39 @@ async fn invoke(
     // `ResponseTooLarge` the moment the buffer would cross the
     // limit, so an amplification template can't briefly allocate
     // multiples of the cap before we notice.
-    let rendered = match state
+    let outcome = match state
         .renderer
         .render(&project, &view, &context, state.max_response_bytes)
     {
-        Ok(s) => s,
+        Ok(o) => o,
         Err(e) => return e.into_response(),
     };
 
     let prefers_json = wants_json(&headers);
     let accepts_html = accepts_html(&headers);
-    respond(rendered, prefers_json, accepts_html)
+    respond(
+        outcome.body,
+        prefers_json,
+        accepts_html,
+        outcome.has_unsafe_raw_output,
+    )
 }
 
 /// Response negotiation policy — see module doc.
-fn respond(rendered: String, prefers_json: bool, accepts_html: bool) -> Response {
+///
+/// `template_has_unsafe_raw_output` — h2ck.me v1 N1 backstop: when
+/// the source template contained a `{{{X}}}` triple-brace expression
+/// that isn't `{{{json ...}}}`, force `text/plain` on the JSON-
+/// detection fallback path REGARDLESS of `Accept: text/html`. That
+/// prevents the composite-XSS lane (bad template + attacker `Accept`)
+/// even when the operator hasn't audited every DSL for triple-brace
+/// misuse.
+fn respond(
+    rendered: String,
+    prefers_json: bool,
+    accepts_html: bool,
+    template_has_unsafe_raw_output: bool,
+) -> Response {
     if prefers_json {
         return match serde_json::from_str::<Value>(&rendered) {
             Ok(v) => (StatusCode::OK, axum::Json(v)).into_response(),
@@ -163,14 +181,15 @@ fn respond(rendered: String, prefers_json: bool, accepts_html: bool) -> Response
     }
     // Client did not signal JSON preference — opportunistically
     // detect JSON output and upgrade the MIME. On non-JSON output
-    // the fallback is `text/html` **only** when the caller
-    // explicitly asked for it via `Accept: text/html`; otherwise
-    // `text/plain` so a template author's mistake can't feed
-    // attacker-influenced markup to a browser (h2ck.me v1 M2).
+    // the fallback is `text/html` **only** when (a) the caller
+    // explicitly asked for it via `Accept: text/html` AND (b) the
+    // source template contained no un-escaped triple-brace
+    // expressions (h2ck.me v1 M2 + N1 composite defense).
     match serde_json::from_str::<Value>(&rendered) {
         Ok(v) => (StatusCode::OK, axum::Json(v)).into_response(),
         Err(_) => {
-            let ct = if accepts_html {
+            let allow_html = accepts_html && !template_has_unsafe_raw_output;
+            let ct = if allow_html {
                 "text/html; charset=utf-8"
             } else {
                 "text/plain; charset=utf-8"

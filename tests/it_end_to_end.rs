@@ -608,3 +608,130 @@ fn copy_dir(src: &Path, dst: &Path) {
         }
     }
 }
+
+// ---------- N1 composite XSS regression pins ----------
+//
+// h2ck.me v1 BREAK-TESTS/RUNTIME-FINDINGS.md §N1 upgraded the
+// audit's M1 (docs-only for triple-brace XSS) with a runtime backstop
+// requirement: even when a caller explicitly sends
+// `Accept: text/html`, a template using `{{{X}}}` (non-json triple-
+// brace, un-escaped output) must NOT be served as `text/html` —
+// otherwise the composite of a bad template + attacker Accept header
+// is a stored-XSS lane. The renderer flags the template; the router
+// forces `text/plain` on the fallback path regardless of Accept.
+
+#[tokio::test]
+async fn n1_triple_brace_template_forces_text_plain_even_with_html_accept() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "attack", "xss", "{{{name}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/attack/xss"))
+        .header("content-type", "application/json")
+        .header("accept", "text/html")
+        .body(json!({"name": "<script>alert(1)</script>"}).to_string())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("text/plain"),
+        "N1 fail: expected text/plain, got Content-Type: {ct}"
+    );
+    // The raw output was still rendered — no data loss. The point
+    // is that browsers won't execute it because the MIME is
+    // text/plain, so the tag renders as literal text.
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("<script>"),
+        "expected raw payload in body, got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn n1_json_helper_template_stays_json_response() {
+    // Belt-and-braces: a template using the LEGIT `{{{json obj}}}`
+    // helper is NOT flagged as unsafe. Its output is valid JSON and
+    // the response goes through the JSON path — content-type
+    // application/json regardless of Accept. The relevant negative
+    // check is: the N1 backstop does NOT mistakenly force text/plain
+    // on the legit case.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "safe", "obj", "{{{json body}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/safe/obj"))
+        .header("content-type", "application/json")
+        .header("accept", "text/html")
+        .body(json!({"body": {"k": "v"}}).to_string())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("application/json"),
+        "expected application/json for valid-JSON render output, got: {ct}"
+    );
+}
+
+#[tokio::test]
+async fn n1_double_brace_template_still_gets_text_html_on_explicit_accept() {
+    // Regression pin: the N1 defense must NOT apply to plain
+    // double-brace templates. Handlebars HTML-escapes those, so
+    // serving text/html is safe. Otherwise the fix would over-fire
+    // and break every legitimate HTML template.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "safe", "greet", "<h1>Hello {{name}}</h1>");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/safe/greet"))
+        .header("content-type", "application/json")
+        .header("accept", "text/html")
+        .body(json!({"name": "<script>alert(1)</script>"}).to_string())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("text/html"),
+        "expected text/html for double-brace template with explicit Accept, got: {ct}"
+    );
+    // handlebars-rust HTML-escapes double-brace values: browser sees
+    // `&lt;script&gt;` as literal text, not markup.
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("&lt;script&gt;"),
+        "handlebars must HTML-escape: {body}"
+    );
+    assert!(
+        !body.contains("<script>"),
+        "unescaped script tag leaked: {body}"
+    );
+}
