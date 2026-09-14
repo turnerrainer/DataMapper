@@ -5,19 +5,33 @@ DataMapper's public-facing docs describe what the product does, and
 this file describes what a code-writing agent needs to know to not
 break it.
 
-**Current release**: `v0.1.3-alpha` — security-hardening pass
-(h2ck.me v1 audit, 5/5 findings closed). See
-[`CHANGELOG.md`](./CHANGELOG.md) for the full delta.
+**Current release** on `dev`: `v0.1.3-alpha` (last shipped).
+
+**Pending on `dev`**: a large security + FLEET-STRONGHOLDS rollup
+merged from `feat/security-and-fleet-rollup-v1` — closes every
+h2ck.me v1 audit + break-test finding surfaced after `v0.1.3-alpha`
+(N1, N2, N3, N5, N6, N7, N8, F-DM-1, FN-LOG-1..4) and adopts five
+`FLEET-STRONGHOLDS.md` patterns (§1.6 W3C traceparent
+propagation, §5.1 default security response headers, §8.2 doctor
+CLI subcommand, §11.2 env-safety posture gate, §11.3 dev-fixture
+DSL gate). **Version has NOT been bumped** — the maintainer owns
+the release cut. See "Rollup deltas" below for the wire-visible
+changes to review before the next release.
 
 **Trunk**: `dev`. There is no `main` branch on origin; releases
-tag off `dev` after review.
+tag off `dev` after review. **Never push `main` and never bump
+`Cargo.toml`/`VERSION`/`CHANGELOG.md` release headers without
+explicit maintainer approval** — release cadence is a
+human-authorised operation.
 
 **Verification set — every command exits 0 before you commit:**
 
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast     # 66 passed / 0 failed on v0.1.3-alpha
+cargo test --no-fail-fast     # 155 passed / 0 failed on the rollup
+                              # (was 66 on v0.1.3-alpha)
+cargo audit --deny warnings
 ```
 
 `fmt --check` is a CI gate on its own — `clippy` + `test` clean is
@@ -133,12 +147,201 @@ directories.
 symlink swap). Production compose files mount `DSL:/app/DSL:ro`
 already; the WARN catches deployments that deviated.
 
-**Refuses to start?** — no. Local dev loops legitimately want a
-writable tree. The WARN is loud; treat it as a hard failure in
-staging/prod checklists.
+**Refuses to start?** — WARN-only on `v0.1.3-alpha`. On the
+rollup (see below) this UPGRADES to refuse-to-start when
+`APP_ENV` is non-dev.
 
-**Code** — `src/main.rs` `warn_on_writable_dsl_root` +
+**Code** — `src/main.rs` `is_dsl_root_writable` +
 `is_writable_by_us`.
+
+---
+
+## Rollup deltas (pending — not yet in a tagged release)
+
+The `feat/security-and-fleet-rollup-v1` merge into `dev` adds
+these wire-visible / operator-visible changes on top of the
+v0.1.3-alpha behaviours above. Each has regression tests; count
+went 66 → 155.
+
+### R.1 — Access log middleware + plain-text log stream (FN-LOG-1/2/3)
+
+Every request emits one INFO line:
+`http_request_completed method=X route=Y status=Z duration_us=... trace_id=...`.
+No headers, bodies, client IPs, or raw URIs are logged — matched
+route pattern only. `tracing_subscriber` also emits plain-text
+(no ANSI escapes) when stderr is not a TTY, so `docker logs` /
+`journalctl` capture SIEM-clean bytes.
+
+- **Detect**: `docker logs <container> | LC_ALL=C tr -cd $'\x1b' | wc -c` returns 0.
+- **Code**: `src/access_log.rs` + `main.rs` tracing init.
+
+### R.2 — Five default security response headers (FLEET §5.1)
+
+Every response (200 / 404 / 413 / 500) now carries:
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`,
+`Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`,
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`. Handler-set values are preserved
+(insert-if-absent semantics).
+
+- **Code**: `src/security_headers.rs` — `HEADERS` const is the
+  single source of truth; regression tests iterate over it.
+
+### R.3 — W3C `traceparent` + `x-trace-id` response headers (FLEET §1.6)
+
+Every response carries `traceparent: 00-<32-hex trace>-<16-hex span>-01`
+and `x-trace-id: <trace>`. Inbound `traceparent` is inherited when
+well-formed (version=00, 32-hex trace-id ≠ all-zeros); fresh
+`uuid::v4` otherwise. Span id is ALWAYS regenerated — that's this
+service's span, not the caller's.
+
+- **New dep**: `uuid = "1"` with `default-features = false, features = ["v4"]`.
+- **Code**: `src/traceparent.rs`.
+
+### R.4 — Accept-header parsed per RFC 7231 (N2)
+
+`accepts_html` / `wants_json` now honour `;q=` quality values.
+`Accept: text/html;q=0` correctly excludes HTML; `Accept:
+application/json;q=0, text/html` correctly selects HTML. M2's
+"explicit opt-in only" rule holds — bare `*/*` still does NOT
+enable the HTML fallback.
+
+- **Code**: `src/router.rs::accept_qvalue` + `MatchSpecificity`.
+
+### R.5 — Triple-brace templates forced to `text/plain` (N1)
+
+Templates using `{{{X}}}` (non-`json` triple-brace) always serve
+`Content-Type: text/plain` on the fallback path, regardless of
+`Accept: text/html`. Closes the composite-XSS lane the audit's
+M2 fix didn't reach. `{{{json obj}}}` (legit helper) still
+serves as JSON.
+
+- **Detect at boot**: WARN per template — see
+  `warn_on_unsafe_raw_output_templates` in `main.rs`.
+- **Code**: `src/renderer.rs::contains_unsafe_raw_output` +
+  `RenderOutcome.has_unsafe_raw_output`; router forces text/plain.
+
+### R.6 — Body-read deadline via `tokio::time::timeout` (N3)
+
+`invoke()` now takes `Request` (not `Bytes`) and drives
+`axum::body::to_bytes` under an explicit deadline
+(`limits.request_timeout_secs`, was hard-coded to the layer's
+30s). Slow-drip / slow-loris uploads produce a structured 408
+`RequestReadTimeout`.
+
+The `limits.request_timeout_secs` config field is now wired
+end-to-end (was only used by the TimeoutLayer via the hard-code
+30s constant). Operators tuning the field will see it take
+effect on both the whole-request cap and the body-read cap.
+
+- **Code**: `src/router.rs::invoke` +
+  `AppState.request_timeout_secs`.
+
+### R.7 — Request-body array-length cap (F-DM-1)
+
+Before render, the router walks the parsed JSON depth-first and
+refuses any array whose element count exceeds
+`limits.max_body_array_length` (default 10 000). Response is
+413 `RequestArrayTooLarge` with `{length, limit}`. Set the cap
+to `0` to disable.
+
+- **Code**: `src/router.rs::find_oversize_array`.
+
+### R.8 — Per-header value size cap (N8)
+
+Middleware `header_value_size_gate` refuses any request with a
+single header value > 8 KiB. Response is 431 `HeaderValueTooLarge`
+with `{actual, limit}`. Header names are NOT echoed in the
+response body (log-hygiene).
+
+- **Code**: `src/router.rs::header_value_size_gate` +
+  `MAX_HEADER_VALUE_BYTES`.
+
+### R.9 — 404 shape unified + tried-paths clipped (N5 + N6 + FN-LOG-4)
+
+Two changes bundled:
+- `TemplateNotFound.tried` entries clipped at 256 chars per entry
+  (was unbounded → 4× URL-length amplification).
+- Global fallback handler emits the same
+  `{"error":"NotFound","message":"..."}` shape for
+  path-encoded-traversal requests that used to hit Axum's
+  empty-body default 404.
+
+- **Code**: `src/error.rs::clip_tried_paths` +
+  `not_found_fallback`.
+
+### R.10 — Config parse errors redacted (N7)
+
+`config::redact_serde_error` strips the file's content from
+serde's `invalid type: string "..."` diagnostic before it lands
+in the boot log. An operator who misconfigured `--config` at a
+mounted secret file no longer leaks the secret to log
+aggregators. Location (line, column) preserved; the actual value
+is elided.
+
+- **Code**: `src/config.rs::redact_serde_error`.
+
+### R.11 — Env-safety gates (FLEET §11.2 + §11.3)
+
+New `src/env_safety.rs` module. `Environment::from_env()` reads
+`APP_ENV` / `ENVIRONMENT` / `DEPLOY_ENV`; unknown values
+fail-safe to `Production`.
+
+- **§11.2** — writable DSL root (was WARN-only) now REFUSES to
+  boot in non-dev.
+- **§11.3** — DSL loader refuses to load any `.hbs` whose path
+  matches `dev-login`, `mock-`, `-mock`, `/test/`, `example-`,
+  `-example`, `/dev/`, `/mocks/` when non-dev. Shipped
+  `DSL/samples/` tree does NOT trip any pattern.
+
+- **Boot error shape** in non-dev:
+  ```
+  REFUSING TO START in Production: 1 unsafe posture item(s):
+    - dsl.root_writable: DSL root is writable ...
+        fix: mount the DSL tree read-only ... OR set APP_ENV=dev
+  ```
+
+### R.12 — `datamapper doctor` subcommand (FLEET §8.2)
+
+Pre-boot validation without side effects. Prints one line per
+check with `[ok]/[warn]/[error]` prefix (grep-friendly). Exit
+`0` when nothing above `Ok` fired, `1` on any error (or on any
+warn with `--strict`).
+
+```bash
+$ datamapper doctor            # validate; exit 0 unless error
+$ datamapper doctor --strict   # exit 1 on any WARN too
+$ datamapper --config x.yaml doctor
+$ datamapper serve             # explicit run (default)
+$ datamapper                   # implicit serve
+```
+
+- **New dep**: `clap = "4"` with `derive` feature.
+- **Code**: `src/doctor.rs` + `main.rs` (clap wiring).
+
+---
+
+## Rollup wire-shape summary (release note draft)
+
+If you're helping the maintainer draft the release notes for
+whatever the next tag will be, the operator-visible checklist:
+
+- New response headers on EVERY response (5 security headers +
+  `traceparent` + `x-trace-id`).
+- New response status codes possible: `408 RequestReadTimeout`,
+  `413 RequestArrayTooLarge`, `431 HeaderValueTooLarge` — all
+  structured JSON with error/message/… fields.
+- Boot may REFUSE to start on non-dev with weak posture (see R.11)
+  — set `APP_ENV=dev` if the deployment intentionally deviates.
+- `Accept: text/html` semantics tightened (see R.4) — RFC-compliant
+  callers behave correctly; buggy `q=0` callers now go the right
+  way.
+- New config field `limits.max_body_array_length` (default 10 000);
+  new subcommand `datamapper doctor`; new deps `uuid`, `clap` +
+  transitives.
+
+Every point above has at least one regression test; nothing in
+the rollup landed without a pin.
 
 ---
 

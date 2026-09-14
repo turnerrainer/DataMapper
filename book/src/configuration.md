@@ -39,11 +39,14 @@ port: 3000
 dsl_path: ./DSL
 
 # Resource ceilings. Overrun surfaces as a structured 413 (inbound
-# body cap) or 500 (rendered-output cap) or 504 (request timeout).
+# body cap) or 500 (rendered-output cap) or 408 (slow-body body-read
+# deadline) or 504 (whole-request timeout) or 413 with the specific
+# `RequestArrayTooLarge` error code (body array cap).
 limits:
   max_request_bytes: 2097152      # 2 MiB
   max_response_bytes: 16777216    # 16 MiB
-  request_timeout_secs: 30
+  request_timeout_secs: 30        # whole-request + body-read deadline
+  max_body_array_length: 10000    # 0 to disable
 ```
 
 ### 1.2 Field reference
@@ -52,9 +55,10 @@ limits:
 |---|---|---|---|
 | `port` | u16 | `3000` | TCP port the server binds on `0.0.0.0`. Can be overridden by the `PORT` env var if the config file omits this field. |
 | `dsl_path` | path | `./DSL` | Root of the template folder tree. |
-| `limits.max_request_bytes` | usize | `2 * 1024 * 1024` | Inbound body cap. Overflow → 413. |
+| `limits.max_request_bytes` | usize | `2 * 1024 * 1024` | Inbound body cap. Overflow → 413 `RequestTooLarge`. |
 | `limits.max_response_bytes` | usize | `16 * 1024 * 1024` | Rendered output cap. Overflow → 500 `ResponseTooLarge`. |
-| `limits.request_timeout_secs` | u64 | `30` | Wall-clock ceiling per render call. Overrun → 504 Gateway Timeout. |
+| `limits.request_timeout_secs` | u64 | `30` | Wall-clock ceiling. Applied at **two** places: (1) whole-request timeout via `TimeoutLayer` (overrun → 504 Gateway Timeout); (2) body-read deadline around `to_bytes` (overrun → 408 `RequestReadTimeout`) to defeat slow-loris uploads. |
+| `limits.max_body_array_length` | usize | `10000` | Max array element count anywhere in the request-body JSON, walked depth-first. Overflow → 413 `RequestArrayTooLarge` with `{length, limit}`. Set to `0` to disable. Bounds the `{{#each}}` amplification lane before render starts. |
 
 Unknown top-level or nested field → hard parse error at boot. Typo
 protection (`dsl-path:` for `dsl_path:` etc.) is enforced by
@@ -97,9 +101,36 @@ limits:
 
 ### 2.1 CLI
 
-| Flag | Effect |
-|---|---|
-| `--config <path>` or `--config=<path>` | Absolute or relative path to a `datamapper.yaml`-shaped file. Wins over every other resolution step. |
+Two subcommands:
+
+- `datamapper serve` (default when no subcommand given) — run the HTTP server.
+- `datamapper doctor [--strict]` — validate config + DSL tree + environment
+  without starting the server. Prints one line per check with a
+  `[ok]/[warn]/[error]` prefix; exits `1` on any error (or on any
+  warn when `--strict`). Useful in CI to catch bad configs before a
+  deploy.
+
+| Flag | Scope | Effect |
+|---|---|---|
+| `--config <path>` or `--config=<path>` | global | Absolute or relative path to a `datamapper.yaml`-shaped file. Wins over every other resolution step. |
+| `--strict` | `doctor` only | Exit non-zero on any WARN, not just ERROR. |
+| `-h` / `--help` | global | Print help. |
+| `-V` / `--version` | global | Print version. |
+
+**Example doctor output**:
+
+```
+[ok]    env: cwd = /app
+[ok]    env: PORT env not set — using config / default
+[ok]    env: DATAMAPPER_CONFIG env not set — using default search path
+[ok]    config: loaded from ./datamapper.yaml
+[ok]    config: port=3000 dsl_path=./DSL max_req=2097152 max_resp=16777216 req_to=30s
+[ok]    dsl: 11 template(s) discovered under ./DSL
+[warn]  dsl: dsl_path ./DSL is writable by this process — production
+        deployments should mount read-only …
+
+summary: 6 ok, 1 warn, 0 error
+```
 
 ### 2.2 Environment variables
 
@@ -108,6 +139,7 @@ limits:
 | `DATAMAPPER_CONFIG` | Absolute path to the config file. Wins over the default search order but yields to `--config`. |
 | `PORT` | JS DataMapper compatibility. Applied iff the loaded config does not explicitly set `port:`. `PORT=8181 datamapper` binds on 8181. Unparseable values (e.g., `PORT=xyz`) fall back to the default and log a warning. |
 | `RUST_LOG` | `tracing-subscriber` filter directive. `info` is the shipping default; `debug` adds per-request detail; `trace` includes handlebars-internal logging. |
+| `APP_ENV` / `ENVIRONMENT` / `DEPLOY_ENV` | Env classification for the FLEET-STRONGHOLDS §11 safety gates (first non-empty wins). Values: `dev`/`development`/`local` (permits weak posture with WARN), `test`/`testing`/`ci`, `stage`/`staging`/`preprod`, `prod`/`production`/`live` (refuses to boot on unsafe posture — see §3.4). Missing or unknown values fail-safe to `Production`. |
 
 **Example:**
 
@@ -221,3 +253,80 @@ The server continues to boot with the fallback port (either from
 count as an HTML opt-in — the fallback for those clients is
 `text/plain`, so an operator error page containing attacker-influenced
 input cannot be rendered as HTML by a wildcard-Accept client.
+
+Post-v0.1.3-alpha, two further tightenings apply:
+
+- The `Accept:` parser now honours RFC 7231 `;q=<value>` quality
+  weights. `Accept: text/html;q=0` (explicit exclusion) no longer
+  turns the HTML fallback on; `Accept: application/json;q=0,
+  text/html` correctly selects HTML. `Accept: */*` alone still
+  does NOT enable the HTML fallback.
+- Templates using `{{{X}}}` (non-`json` triple-brace, un-escaped
+  output) always serve `Content-Type: text/plain` on the
+  JSON-detection fallback path — REGARDLESS of `Accept:
+  text/html`. The `{{{json obj}}}` helper output is valid JSON
+  and still upgrades to `application/json`. This closes the
+  composite-XSS lane (bad template + attacker `Accept` header)
+  deterministically.
+
+---
+
+## 6. Response headers on every response
+
+Every response (200, 404, 413, 500, 504, error paths) now carries
+a fixed set of security + observability headers, added by
+middleware. Handler-set values take precedence; middleware only
+inserts if absent.
+
+| Header | Value | Rationale |
+|---|---|---|
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` | Deny subresource loads even if HTML markup ever slipped through the negotiation. |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains; preload` | Two-year HSTS with preload; applied unconditionally so a downstream proxy sees a coherent posture. |
+| `X-Frame-Options` | `DENY` | Redundant with the CSP `frame-ancestors` for modern browsers; still there for older ones. |
+| `X-Content-Type-Options` | `nosniff` | Kills MIME-sniff fallback — DataMapper's `Content-Type` is authoritative. |
+| `Referrer-Policy` | `no-referrer` | HTML templates never leak the referring URL. |
+| `traceparent` | `00-<32 hex trace>-<16 hex span>-01` | W3C Trace Context. Inherited from an inbound `traceparent` when well-formed (version=00, 32-hex non-zero trace-id); freshly generated otherwise. This service's span-id is ALWAYS regenerated. |
+| `x-trace-id` | `<32 hex trace>` | Duplicate of the traceparent trace-id, kept as a separate header because most operator log-grep patterns look for a bare hex id rather than parsing the traceparent shape. |
+
+Access log — one line per completed request:
+
+```
+INFO http_request_completed method=POST route=/:project/*view status=200 duration_us=1234 trace_id=<hex>
+```
+
+Only the matched route pattern is logged (never the raw URI);
+no headers, request/response bodies, or client IPs are logged.
+`tracing-subscriber` emits plain-text (no ANSI escapes) when
+stderr is not a TTY, so `docker logs` / `journalctl` stay
+SIEM-clean.
+
+---
+
+## 7. Environment-aware safety gates
+
+`APP_ENV` (or `ENVIRONMENT` / `DEPLOY_ENV`) is read at boot;
+unknown values fail-safe to `Production`. In any environment
+above `dev`, the following posture items refuse to boot instead of
+warning:
+
+- **DSL root writable** — the compose file mounts `DSL:/app/DSL:ro`
+  by default; deviation aborts boot in non-dev.
+- **Dev-fixture DSL files present** — any `.hbs` under `dsl_path`
+  whose path matches `dev-login`, `mock-`, `-mock`, `/test/`,
+  `example-`, `-example`, `/dev/`, `/mocks/`. Shipped
+  `DSL/samples/` files do NOT trip any pattern. Set `APP_ENV=dev`
+  to permit fixtures locally.
+
+Refusal messages name each offending item + a concrete remediation:
+
+```
+Error: REFUSING TO START in Production: 1 unsafe posture item(s):
+  - dsl.root_writable: DSL root is writable by the DataMapper
+    process — a filesystem writer can swap a .hbs for a symlink
+    to any process-readable file (TOCTOU).
+      fix: mount the DSL tree read-only (compose:
+           `DSL:/app/DSL:ro`) OR set APP_ENV=dev
+```
+
+Use `datamapper doctor` (see §2.1) to preview the checks without
+starting the server.
