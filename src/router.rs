@@ -61,6 +61,14 @@ pub fn build(state: AppState) -> Router {
                 // `invoke` itself.
                 .layer(DefaultBodyLimit::max(request_limit.saturating_add(4096))),
         )
+        // h2ck.me v1 N6 — global fallback so unmatched routes emit
+        // the same `{"error":"NotFound",...}` JSON shape as our
+        // router-owned 404s. Before this, path-encoded traversal
+        // requests (`%2F..%2F..%2Fetc%2Fpasswd`) that Axum decoded
+        // into a different URL fell through to Axum's default 404
+        // — bare empty body, no content-type — inconsistent with
+        // every other error response.
+        .fallback(crate::error::not_found_fallback)
         .layer(timeout_layer)
         .with_state(state)
 }

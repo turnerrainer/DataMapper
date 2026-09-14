@@ -608,3 +608,76 @@ fn copy_dir(src: &Path, dst: &Path) {
         }
     }
 }
+
+// ---------- N5 — 404 tried-path echo clipping ----------
+
+#[tokio::test]
+async fn n5_notfound_tried_paths_clipped_at_256_chars() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    // 10 KB view segment. Pre-fix, the 404 body echoed both
+    // attempted paths in full (~20 KB response). Post-fix, each
+    // tried entry caps at ~256 chars.
+    let long = "a".repeat(10_000);
+    let resp = client
+        .post(format!("{base}/attack/{long}"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "TemplateNotFound");
+    let tried = body["tried"].as_array().expect("tried is a JSON array");
+    for entry in tried {
+        let s = entry.as_str().unwrap();
+        assert!(
+            s.chars().count() <= 300,
+            "N5 fail: tried entry too long: {} chars",
+            s.chars().count()
+        );
+        assert!(
+            s.contains("[truncated]"),
+            "expected truncation marker on long entry: {s}"
+        );
+    }
+}
+
+// ---------- N6 — unified 404 shape across router + fallback ----------
+
+#[tokio::test]
+async fn n6_encoded_traversal_yields_structured_notfound() {
+    // Path-encoded traversal — Axum decodes %2F into slashes and
+    // the URL no longer matches `/:project/*view`, so it hits the
+    // global fallback. Pre-fix, that returned an empty body with
+    // no content-type. Post-fix, the fallback emits the same
+    // structured JSON shape.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/..%2F..%2Fetc%2Fpasswd"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.contains("application/json"),
+        "N6 fail: fallback must be JSON, got: {ct}"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "NotFound");
+    assert!(body["message"].is_string());
+}
