@@ -67,6 +67,14 @@ pub fn build(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(
             crate::access_log::access_log_middleware,
         ))
+        // FLEET-STRONGHOLDS §5.1 — five default security headers
+        // (CSP, HSTS, X-Frame-Options, X-Content-Type-Options,
+        // Referrer-Policy) on every response including error paths.
+        // Applied AFTER handler routing so error handlers and
+        // fallbacks also inherit them.
+        .layer(axum::middleware::from_fn(
+            crate::security_headers::security_headers,
+        ))
         .with_state(state)
 }
 
