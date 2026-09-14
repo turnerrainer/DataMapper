@@ -48,6 +48,12 @@ async fn main() -> anyhow::Result<()> {
     // accessor so operators know which files the compat rewriter is
     // fixing up under the hood.
     warn_on_ported_js_dsl_syntax(&cfg.dsl_path);
+    // h2ck.me v1 N1 — WARN per template that uses a non-json
+    // triple-brace (`{{{X}}}`) mustache expression. The runtime
+    // backstop in `router::respond` forces `text/plain` on those
+    // templates' fallback responses, but boot visibility lets
+    // operators find and audit the affected DSLs.
+    warn_on_unsafe_raw_output_templates(&cfg.dsl_path);
     // h2ck.me v1 L1 — DSL root MUST be read-only in production.
     // A writable mount lets a filesystem-writer replace a `.hbs`
     // with a symlink to any file the process can read (classic
@@ -77,6 +83,53 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Emit a per-template WARN for every `.hbs` under `dsl_root` that
+/// contains a `{{{X}}}` triple-brace mustache expression whose inner
+/// form is NOT the built-in `json` helper. See h2ck.me v1 N1 in
+/// `SECURITY.md` for the composite-XSS lane this catches.
+///
+/// The runtime backstop in `router::respond` already deterministic-
+/// ally forces `text/plain` on affected templates' fallback
+/// responses — this walk exists so an operator (a) sees which files
+/// need auditing at boot time and (b) can excise the raw output if
+/// the response was legitimately expected to be HTML.
+fn warn_on_unsafe_raw_output_templates(dsl_root: &std::path::Path) {
+    if !dsl_root.is_dir() {
+        return;
+    }
+    let mut affected: Vec<String> = Vec::new();
+    for entry in walkdir::WalkDir::new(dsl_root)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if entry.path().extension().and_then(|s| s.to_str()) != Some("hbs") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if datamapper::renderer::contains_unsafe_raw_output(&body) {
+            if let Ok(rel) = entry.path().strip_prefix(dsl_root) {
+                affected.push(rel.display().to_string());
+            }
+        }
+    }
+    if !affected.is_empty() {
+        let shown: Vec<String> = affected.iter().take(10).cloned().collect();
+        tracing::warn!(
+            "{} template(s) under {} use `{{{{{{X}}}}}}` (non-json triple-brace / raw output) — the runtime forces text/plain on their fallback responses (h2ck.me v1 N1). Audit and prefer `{{{{X}}}}` (double-brace, HTML-escaped) unless the response is JSON-shaped: {}{}",
+            affected.len(),
+            dsl_root.display(),
+            shown.join(", "),
+            if affected.len() > shown.len() {
+                format!(", … +{} more", affected.len() - shown.len())
+            } else {
+                String::new()
+            },
+        );
+    }
 }
 
 /// Emit a WARN if the DSL root — or any subdirectory beneath it —
