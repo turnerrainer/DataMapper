@@ -2,17 +2,94 @@
 //!
 //! Assembles: config → renderer → axum router → server. Binds on
 //! `0.0.0.0:<config.port>`.
+//!
+//! **Subcommands** (FLEET §8.2):
+//! - default / `serve` — run the HTTP server (behaviour identical
+//!   to pre-clap boot).
+//! - `doctor [--strict]` — validate config + DSL tree + env
+//!   without starting the server. Prints one line per check with a
+//!   `[ok]/[warn]/[error]` prefix; exits `1` on any error (or on
+//!   any warn when `--strict`).
 
+use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 
+use clap::{Parser, Subcommand};
 use datamapper::{
     config::AppConfig,
+    doctor,
     renderer::Renderer,
     router::{self, AppState},
 };
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+#[derive(Parser)]
+#[command(name = "datamapper", version, about, long_about = None)]
+struct Cli {
+    /// Explicit config file path — overrides the
+    /// `DATAMAPPER_CONFIG` env and the default search order.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the HTTP server (default).
+    Serve,
+    /// Validate config + DSL tree + environment without starting
+    /// the server. Prints one line per check; exits non-zero on
+    /// error.
+    Doctor {
+        /// Exit non-zero on any WARN, not just ERROR.
+        #[arg(long)]
+        strict: bool,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    // Set DATAMAPPER_CONFIG from --config once, so both `serve`
+    // and `doctor` see the same config-search behaviour.
+    if let Some(path) = &cli.config {
+        std::env::set_var("DATAMAPPER_CONFIG", path);
+    }
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("Error: failed to start tokio runtime: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match rt.block_on(serve()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("Error: {e:?}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Doctor { strict } => run_doctor(cli.config.as_deref(), strict),
+    }
+}
+
+fn run_doctor(config_override: Option<&std::path::Path>, strict: bool) -> ExitCode {
+    // Doctor deliberately does NOT initialise tracing — its output
+    // goes to stdout in a stable one-line-per-check format that
+    // operators can grep. Tracing to stderr would mix in noise.
+    let diagnostics = doctor::run(config_override);
+    doctor::print(&diagnostics);
+    match doctor::exit_code(&diagnostics, strict) {
+        0 => ExitCode::SUCCESS,
+        _ => ExitCode::FAILURE,
+    }
+}
+
+async fn serve() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
