@@ -30,6 +30,17 @@ pub enum DataMapperError {
     #[error("request header value of {actual} bytes exceeds cap {cap}")]
     HeaderValueTooLarge { actual: usize, cap: usize },
 
+    /// h2ck.me v1 PUBLIC-EXPOSURE-FINDINGS §F-DM-1 — the caller's
+    /// JSON body contains an array whose element count exceeds the
+    /// operator-configured amplification cap. The primary defense
+    /// (`CappedWriter` at `max_response_bytes`) already bounds the
+    /// output; this earlier check bounds the CPU cost of a
+    /// `{{#each}}` iteration explosion before render even starts.
+    #[error(
+        "request body array of {length} elements exceeds cap {cap} — kill the amplification lane before render"
+    )]
+    RequestArrayTooLarge { length: usize, cap: usize },
+
     #[error("rendered output exceeds limit of {limit} bytes")]
     ResponseTooLarge { limit: usize },
 
@@ -63,6 +74,7 @@ impl DataMapperError {
             DataMapperError::HeaderValueTooLarge { .. } => {
                 StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
             }
+            DataMapperError::RequestArrayTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             DataMapperError::ResponseTooLarge { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             DataMapperError::InvalidJson(_) => StatusCode::BAD_REQUEST,
             DataMapperError::InvalidPath(_) => StatusCode::BAD_REQUEST,
@@ -78,6 +90,7 @@ impl DataMapperError {
             DataMapperError::TemplateRenderError { .. } => "TemplateRenderError",
             DataMapperError::RequestTooLarge { .. } => "RequestTooLarge",
             DataMapperError::HeaderValueTooLarge { .. } => "HeaderValueTooLarge",
+            DataMapperError::RequestArrayTooLarge { .. } => "RequestArrayTooLarge",
             DataMapperError::ResponseTooLarge { .. } => "ResponseTooLarge",
             DataMapperError::InvalidJson(_) => "InvalidJson",
             DataMapperError::InvalidPath(_) => "InvalidPath",
@@ -142,6 +155,10 @@ impl IntoResponse for DataMapperError {
         }
         if let DataMapperError::HeaderValueTooLarge { actual, cap } = &self {
             body["actual"] = json!(actual);
+            body["limit"] = json!(cap);
+        }
+        if let DataMapperError::RequestArrayTooLarge { length, cap } = &self {
+            body["length"] = json!(length);
             body["limit"] = json!(cap);
         }
         if let DataMapperError::TemplateRenderError { view, .. } = &self {
