@@ -839,3 +839,62 @@ async fn o1_traceparent_present_on_error_response_too() {
         "x-trace-id missing on error response"
     );
 }
+
+// ---------- N8 — per-header value size cap ----------
+
+#[tokio::test]
+async fn n8_oversize_single_header_returns_431_structured() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    // 10 KB header value — 2 KB over the 8 KB middleware cap.
+    let huge = "X".repeat(10 * 1024);
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("x-attacker-header", &huge)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 431);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "HeaderValueTooLarge");
+    assert_eq!(body["limit"], 8 * 1024);
+    assert!(body["actual"].as_u64().unwrap() >= 10 * 1024);
+}
+
+#[tokio::test]
+async fn n8_at_cap_boundary_admits_request() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    // Exactly 8192 bytes — at the cap; `>`, not `>=`, so admits.
+    let at_cap = "X".repeat(8 * 1024);
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("x-large-but-legit", &at_cap)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn n8_small_headers_admitted() {
+    // Sanity: normal-shaped requests are unaffected. The N8 fix must
+    // not regress the happy path.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("authorization", "Bearer some-normal-jwt-shape-token")
+        .header("accept", "application/json")
+        .header("x-request-id", "abc-123-def")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}

@@ -23,8 +23,9 @@
 use crate::error::DataMapperError;
 use crate::renderer::Renderer;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, post};
 use axum::Router;
@@ -32,6 +33,23 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::timeout::TimeoutLayer;
+
+/// Application-layer cap on any single request-header value size.
+///
+/// Rationale (h2ck.me v1 BREAK-TESTS/RUNTIME-FINDINGS.md §N8):
+/// hyper's default per-header cap is generous (400+ KiB); a 70 KB
+/// `X-Long-Header: XXX…` was accepted with a 200 in the audit run.
+/// The middleware runs after hyper has already buffered the header
+/// set (that's a hyper-level concern), but rejects at the
+/// application layer with a structured 431 so an operator's WAF /
+/// log aggregator sees the standard error shape rather than a
+/// silently-processed request.
+///
+/// 8 KiB matches most reverse-proxy defaults (nginx
+/// `large_client_header_buffers 4 8k`, Cloudflare's per-header
+/// cap). Legit headers (JWT, session cookies, W3C traceparent) fit
+/// under this comfortably.
+const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -62,6 +80,12 @@ pub fn build(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(request_limit.saturating_add(4096))),
         )
         .layer(timeout_layer)
+        // h2ck.me v1 N8 — application-layer cap on per-header value
+        // size. Runs FIRST (last-in-chain is outermost, first-in-chain
+        // is closest to the handler; Router::layer wraps in
+        // outer-first order) so oversize headers 431 before any of
+        // the more expensive middleware runs.
+        .layer(axum::middleware::from_fn(header_value_size_gate))
         // Audit LOG-v1 FN-LOG-2: emit one INFO line per completed request
         // for SOC2/ISO27001 access-log compliance. See src/access_log.rs.
         .layer(axum::middleware::from_fn(
@@ -198,6 +222,29 @@ fn respond(rendered: String, prefers_json: bool, accepts_html: bool) -> Response
             (StatusCode::OK, [(header::CONTENT_TYPE, ct)], rendered).into_response()
         }
     }
+}
+
+/// Middleware: reject any request whose header set contains a value
+/// exceeding [`MAX_HEADER_VALUE_BYTES`] with a structured 431.
+///
+/// The check runs in a single pass over `req.headers()` — bounded
+/// work proportional to header count (hyper's default cap is 100
+/// distinct headers), independent of the individual header sizes.
+/// The first offender wins; the response names the actual size for
+/// the operator's debugging convenience but does NOT echo the
+/// header name (log-hygiene: header names can be attacker-chosen
+/// and would land in the log stream via error-response body).
+pub async fn header_value_size_gate(req: Request, next: Next) -> Response {
+    for value in req.headers().values() {
+        if value.len() > MAX_HEADER_VALUE_BYTES {
+            return DataMapperError::HeaderValueTooLarge {
+                actual: value.len(),
+                cap: MAX_HEADER_VALUE_BYTES,
+            }
+            .into_response();
+        }
+    }
+    next.run(req).await
 }
 
 /// True iff the client's `Accept` header lists `text/html`
