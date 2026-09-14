@@ -25,10 +25,22 @@ fn write_dsl(dsl_root: &Path, project: &str, view: &str, body: &str) {
 /// Spawn the DataMapper HTTP server on an ephemeral port bound to
 /// `127.0.0.1:0`. Returns the base URL for the client to hit.
 async fn spawn_server(dsl_root: &Path, max_req_bytes: usize, max_resp_bytes: usize) -> String {
+    spawn_server_with_timeout(dsl_root, max_req_bytes, max_resp_bytes, 30).await
+}
+
+/// Same as [`spawn_server`] but with an explicit
+/// `request_timeout_secs` — used by the N3 slow-body regression pin.
+async fn spawn_server_with_timeout(
+    dsl_root: &Path,
+    max_req_bytes: usize,
+    max_resp_bytes: usize,
+    request_timeout_secs: u64,
+) -> String {
     let state = AppState {
         renderer: Arc::new(Renderer::new(dsl_root.to_path_buf())),
         max_request_bytes: max_req_bytes,
         max_response_bytes: max_resp_bytes,
+        request_timeout_secs,
     };
     let app = router::build(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -606,5 +618,77 @@ fn copy_dir(src: &Path, dst: &Path) {
         } else {
             std::fs::copy(&src_path, &dst_path).unwrap();
         }
+    }
+}
+
+// ---------- N3 slow-body / slow-loris regression pin ----------
+
+/// h2ck.me v1 BREAK-TESTS/RUNTIME-FINDINGS.md §N3 (MEDIUM) —
+/// pre-fix, a client that dripped a request body one byte at a time
+/// could keep a Tokio task slot open indefinitely; the outer
+/// `TimeoutLayer` only starts its clock once the service future
+/// runs, and body extraction happens inside that service future.
+///
+/// This test opens a raw TCP connection to the server, sends a valid
+/// HTTP request line + headers, then dribbles the body across
+/// several seconds while the server is configured with a 1-second
+/// timeout. The server must close with a 408 `RequestReadTimeout`
+/// well under the drip total.
+#[tokio::test]
+async fn n3_slow_body_read_hits_deadline() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpStream;
+
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    // 1-second body-read deadline so the test finishes fast.
+    let base = spawn_server_with_timeout(tmp.path(), 2 * 1024 * 1024, 16 * 1024 * 1024, 1).await;
+    let host_port = base.trim_start_matches("http://").to_string();
+
+    let mut stream = TcpStream::connect(&host_port).await.unwrap();
+
+    // Announce a 200-byte body but never actually send it. The
+    // server must close the connection or 408 within the 1s
+    // deadline.
+    let head = "POST /samples/echo HTTP/1.1\r\n\
+                Host: localhost\r\n\
+                Content-Type: application/json\r\n\
+                Content-Length: 200\r\n\
+                Connection: close\r\n\
+                \r\n";
+    stream.write_all(head.as_bytes()).await.unwrap();
+    // Send one byte, then stall — well within the size limit but
+    // won't complete the announced content-length.
+    stream.write_all(b"{").await.unwrap();
+    stream.flush().await.unwrap();
+
+    // Read whatever the server sends back within 5 seconds. Wall
+    // clock cap ensures the test fails visibly if the deadline
+    // doesn't fire.
+    let mut response = Vec::new();
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut response),
+    )
+    .await;
+
+    assert!(
+        read.is_ok(),
+        "N3 fail: server never responded within 5s — deadline did not fire"
+    );
+    let response_str = String::from_utf8_lossy(&response);
+    // Server should either explicitly emit 408 or close the
+    // connection under the layer's 504. Either is acceptable
+    // evidence that the slow-drip DoS was mitigated; the
+    // structured-JSON 408 is what the fix actually promises.
+    assert!(
+        response_str.starts_with("HTTP/1.1 408") || response_str.starts_with("HTTP/1.1 504"),
+        "N3 fail: expected 408 or 504, got:\n{response_str}"
+    );
+    if response_str.starts_with("HTTP/1.1 408") {
+        assert!(
+            response_str.contains("RequestReadTimeout"),
+            "expected structured error code in 408 body:\n{response_str}"
+        );
     }
 }

@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
         renderer: Arc::new(Renderer::new(cfg.dsl_path.clone())),
         max_request_bytes: cfg.limits.max_request_bytes,
         max_response_bytes: cfg.limits.max_response_bytes,
+        request_timeout_secs: cfg.limits.request_timeout_secs,
     };
 
     let app = router::build(state);
