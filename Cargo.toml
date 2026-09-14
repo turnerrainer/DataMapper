@@ -35,6 +35,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # response middleware (FLEET §1.6). Default features off — we
 # only need v4 random ids, not the DCE / MAC-address variants.
 uuid = { version = "1", default-features = false, features = ["v4"] }
+# CLI parsing for the `datamapper doctor` subcommand (FLEET §8.2
+# pre-boot validation). `derive` for a clap-derive-based Cli /
+# Subcommand definition — `usage` / `help` / `error-context`
+# left on defaults.
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

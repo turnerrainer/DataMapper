@@ -9,6 +9,7 @@
 
 pub mod access_log;
 pub mod config;
+pub mod doctor;
 pub mod env_safety;
 pub mod error;
 pub mod helpers;
