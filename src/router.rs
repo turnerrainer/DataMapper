@@ -200,43 +200,137 @@ fn respond(rendered: String, prefers_json: bool, accepts_html: bool) -> Response
     }
 }
 
-/// True iff the client explicitly listed `text/html` in `Accept`.
-/// A missing header, `*/*`, or an unrelated MIME does NOT count —
-/// see the M2 rationale in the module doc.
+/// True iff the client's `Accept` header lists `text/html`
+/// **explicitly** with a non-zero quality value. `*/*` alone does NOT
+/// count — the M2 rule is "HTML fallback requires an explicit opt-in
+/// because browsers routinely send `*/*` and would otherwise get
+/// executable markup back from a mis-authored template."
+///
+/// Bare `contains("text/html")` was the original M2 check, but
+/// h2ck.me v1 break-test N2 showed two bypasses: `Accept:
+/// text/html;q=0` (explicitly excluded per RFC 7231 §5.3.1) still
+/// matched, and `Accept: application/json;q=0, text/html`
+/// legitimately meaning "give me JSON, definitely not HTML" also
+/// matched and fell through to HTML.
+///
+/// Semantics here: parse the Accept header per RFC 7231 §5.3.2 and
+/// return true iff `text/html` (exact) or `text/*` (type-wildcard)
+/// appears with `q > 0`.
 pub fn accepts_html(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_ascii_lowercase().contains("text/html"))
+    accept_qvalue(headers, "text/html", MatchSpecificity::TypeWildcard)
+        .map(|q| q > 0.0)
         .unwrap_or(false)
 }
 
 /// True if the request signals a JSON preference:
 /// * `type: json` custom header (original DataMapper convention), OR
-/// * `Accept:` header contains `application/json` OR `*/*`.
+/// * `Accept:` header lists `application/json` with `q > 0` at least
+///   as preferred as `text/html`, OR
+/// * `Accept: */*` (safe default) AND `text/html` is not present
+///   with a strictly higher `q` than JSON.
 ///
-/// Case-insensitive on the custom header value.
+/// Case-insensitive on the custom header value. The q-value logic
+/// closes the h2ck.me v1 N2 bypass where a bare-string check for
+/// `application/json` would treat `application/json;q=0, text/html`
+/// as "JSON preferred" — the caller in fact excluded JSON.
 pub fn wants_json(headers: &HeaderMap) -> bool {
     if let Some(v) = headers.get("type").and_then(|v| v.to_str().ok()) {
         if v.eq_ignore_ascii_case("json") {
             return true;
         }
     }
-    if let Some(v) = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()) {
-        // Accept: */* → JSON is the safe default. Any explicit
-        // `application/json` in the list wins too. HTML is only
-        // preferred when the client asked exclusively for it.
-        let lower = v.to_ascii_lowercase();
-        if lower.contains("application/json") {
-            return true;
-        }
-        if lower.contains("*/*") && !lower.contains("text/html") {
-            return true;
-        }
+    let json_q =
+        accept_qvalue(headers, "application/json", MatchSpecificity::TypeWildcard).unwrap_or(0.0);
+    let html_q = accept_qvalue(headers, "text/html", MatchSpecificity::TypeWildcard).unwrap_or(0.0);
+    // Universal wildcard is only consulted for the "safe JSON default"
+    // branch — it must not turn on the HTML fallback.
+    let star_q =
+        accept_qvalue(headers, "application/json", MatchSpecificity::Universal).unwrap_or(0.0);
+    if json_q > 0.0 && json_q >= html_q {
+        return true;
+    }
+    // `*/*` with no explicit media type: JSON is the safe default,
+    // but only when HTML wasn't listed with a strictly higher q.
+    if star_q > 0.0 && json_q == 0.0 && html_q == 0.0 {
+        return true;
     }
     false
 }
 
+/// How specific a match must be to count when resolving an
+/// `Accept` header's q-value. `TypeWildcard` allows exact
+/// (`text/html`) and type-wildcard (`text/*`) matches. `Universal`
+/// additionally allows `*/*` as a fallback match — used only where
+/// the caller wants "JSON is the safe default under `*/*`".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchSpecificity {
+    TypeWildcard,
+    Universal,
+}
+
+/// Look up the effective quality value the client assigned to
+/// `wanted_media` in the `Accept` header, per RFC 7231 §5.3.1 /
+/// §5.3.2. Returns `None` when the header is absent, unparseable, or
+/// the media is not listed at the required minimum specificity.
+///
+/// Matching rules (most-specific wins):
+/// - Exact media (`text/html` matches `text/html`) always wins.
+/// - Type wildcard (`text/*` matches `text/html`) matches when
+///   nothing more specific applies.
+/// - Universal wildcard (`*/*`) matches only when
+///   `min_specificity == Universal`.
+/// - A missing `q=` parameter defaults to `1.0`; a malformed value
+///   defaults to `1.0` (RFC advice — ignore invalid params, don't
+///   reject the entry). Values outside `[0, 1]` are clamped.
+/// - Case-insensitive on the media token, per RFC 9110 §5.1.
+fn accept_qvalue(
+    headers: &HeaderMap,
+    wanted_media: &str,
+    min_specificity: MatchSpecificity,
+) -> Option<f32> {
+    let raw = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok())?;
+    let wanted_lower = wanted_media.to_ascii_lowercase();
+    let (wanted_type, wanted_subtype) = wanted_lower.split_once('/')?;
+    let mut best: Option<(u8, f32)> = None; // (specificity, q)
+    for raw_entry in raw.split(',') {
+        let mut parts = raw_entry.split(';').map(str::trim);
+        let media = parts.next().unwrap_or("").to_ascii_lowercase();
+        let (etype, esub) = match media.split_once('/') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let specificity: u8 = match (etype, esub) {
+            (t, s) if t == wanted_type && s == wanted_subtype => 3,
+            (t, "*") if t == wanted_type => 2,
+            ("*", "*") if min_specificity == MatchSpecificity::Universal => 1,
+            _ => continue,
+        };
+        // Parse ;q=<value> if present; default 1.0. RFC 7231
+        // constrains q to [0, 1] with at most three decimal digits,
+        // but we tolerate any parseable f32 and clamp defensively.
+        let mut q: f32 = 1.0;
+        for param in parts {
+            if let Some(val) = param
+                .strip_prefix("q=")
+                .or_else(|| param.strip_prefix("Q="))
+            {
+                q = val.trim().parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0);
+            }
+        }
+        best = Some(match best {
+            None => (specificity, q),
+            Some((prev_spec, prev_q))
+                if specificity > prev_spec || (specificity == prev_spec && q > prev_q) =>
+            {
+                (specificity, q)
+            }
+            Some(prev) => prev,
+        });
+    }
+    best.map(|(_, q)| q)
+}
+
+/// Look up the effective quality value the client assigned to
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +403,121 @@ mod tests {
         assert!(!accepts_html(&hdrs(&[("accept", "*/*")])));
         assert!(!accepts_html(&hdrs(&[])));
         assert!(!accepts_html(&hdrs(&[("accept", "application/json")])));
+    }
+
+    // ---------- N2 (Accept q-values ignored → M2 bypass) ----------
+    //
+    // h2ck.me v1 BREAK-TESTS/RUNTIME-FINDINGS.md §N2 upgraded the
+    // audit's L3 (Accept q-values ignored) from LOW to MEDIUM because
+    // the M2 fix's bare-string `contains("text/html")` treated
+    // `Accept: text/html;q=0` as a legitimate HTML opt-in — turning
+    // an RFC-compliant "definitely not HTML" client into an XSS
+    // amplifier for a bad triple-brace template.
+
+    #[test]
+    fn n2_html_q_zero_is_not_accepted_as_html() {
+        // RFC 7231 §5.3.1: q=0 means "not acceptable".
+        assert!(!accepts_html(&hdrs(&[("accept", "text/html;q=0")])));
+        assert!(!accepts_html(&hdrs(&[(
+            "accept",
+            "application/json, text/html;q=0"
+        )])));
+    }
+
+    #[test]
+    fn n2_json_q_zero_disqualifies_wants_json() {
+        // Caller: "give me HTML, definitely not JSON."
+        // Was: bare-string `contains("application/json")` → wants_json=true (bug)
+        // Now: json q=0 → wants_json=false; html q=1 → accepts_html=true.
+        assert!(!wants_json(&hdrs(&[(
+            "accept",
+            "application/json;q=0, text/html"
+        )])));
+        assert!(accepts_html(&hdrs(&[(
+            "accept",
+            "application/json;q=0, text/html"
+        )])));
+    }
+
+    #[test]
+    fn n2_qvalues_pick_higher_preference() {
+        // Caller: "html at 1.0, json at 0.5" — html wins by q.
+        // wants_json must return false since json is available but
+        // lower-preference than html.
+        assert!(!wants_json(&hdrs(&[(
+            "accept",
+            "text/html;q=1.0, application/json;q=0.5"
+        )])));
+        assert!(accepts_html(&hdrs(&[(
+            "accept",
+            "text/html;q=1.0, application/json;q=0.5"
+        )])));
+    }
+
+    #[test]
+    fn n2_json_higher_preference_selects_json() {
+        // Inverse of the above — json at 1.0, html at 0.5.
+        assert!(wants_json(&hdrs(&[(
+            "accept",
+            "text/html;q=0.5, application/json;q=1.0"
+        )])));
+    }
+
+    #[test]
+    fn n2_html_q_partial_is_still_accepted() {
+        // `text/html;q=0.9` — legitimate partial preference, still
+        // > 0, still counts as HTML opt-in.
+        assert!(accepts_html(&hdrs(&[("accept", "text/html;q=0.9")])));
+    }
+
+    #[test]
+    fn n2_qvalue_case_insensitive_and_whitespace_tolerant() {
+        // RFC 7231: parameter names are case-insensitive; OWS
+        // permitted around `;` and `=`.
+        assert!(accepts_html(&hdrs(&[("accept", "text/html; Q=0.5")])));
+        assert!(!accepts_html(&hdrs(&[("accept", "text/html ; q=0")])));
+    }
+
+    #[test]
+    fn n2_wildcard_star_star_matches_when_specific_absent() {
+        // `*/*` alone → both accepts_html and json's is-preferred
+        // path resolve via the wildcard. Preserves M2 posture: json
+        // is the safe default under `*/*` while HTML fallback stays
+        // off.
+        assert!(wants_json(&hdrs(&[("accept", "*/*")])));
+        assert!(!accepts_html(&hdrs(&[("accept", "*/*")])));
+    }
+
+    #[test]
+    fn n2_type_wildcard_text_star_matches_text_html() {
+        // `text/*` covers `text/html` at the type level.
+        assert!(accepts_html(&hdrs(&[("accept", "text/*")])));
+    }
+
+    #[test]
+    fn n2_malformed_qvalue_defaults_to_one() {
+        // RFC advice: ignore malformed parameter values; don't reject
+        // the whole entry. So `text/html;q=banana` still counts.
+        assert!(accepts_html(&hdrs(&[("accept", "text/html;q=banana")])));
+    }
+
+    #[test]
+    fn n2_qvalue_out_of_range_is_clamped() {
+        // Some quality libraries emit `q=1.5` or `q=-0.1`; RFC says
+        // out-of-range is invalid, but we clamp defensively so a
+        // pathological value can't invert the check.
+        assert!(accepts_html(&hdrs(&[("accept", "text/html;q=1.5")])));
+        assert!(!accepts_html(&hdrs(&[("accept", "text/html;q=-0.1")])));
+    }
+
+    #[test]
+    fn n2_most_specific_entry_wins_over_wildcard() {
+        // `text/html;q=0, */*;q=1` — the most-specific `text/html`
+        // wins with q=0 → NOT accepted, even though the wildcard
+        // would otherwise match.
+        assert!(!accepts_html(&hdrs(&[(
+            "accept",
+            "text/html;q=0, */*;q=1"
+        )])));
     }
 }
