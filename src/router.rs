@@ -62,6 +62,13 @@ pub fn build(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(request_limit.saturating_add(4096))),
         )
         .layer(timeout_layer)
+        // FLEET-STRONGHOLDS §1.6 — W3C Trace Context response
+        // headers. Every response carries `traceparent:
+        // 00-<trace>-<span>-01` and `x-trace-id: <trace>`. Inbound
+        // `traceparent` is inherited when well-formed; a fresh
+        // 32-hex uuid is generated otherwise. Enables end-to-end
+        // request correlation across the fleet.
+        .layer(axum::middleware::from_fn(crate::traceparent::traceparent))
         .with_state(state)
 }
 
