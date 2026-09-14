@@ -86,6 +86,7 @@ async fn spawn_rust(dsl_root: &std::path::Path) -> String {
         renderer: Arc::new(Renderer::new(dsl_root.to_path_buf())),
         max_request_bytes: 2 * 1024 * 1024,
         max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 10_000,
     };
     let app = router::build(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

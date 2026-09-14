@@ -29,6 +29,7 @@ async fn spawn_server(dsl_root: &Path, max_req_bytes: usize, max_resp_bytes: usi
         renderer: Arc::new(Renderer::new(dsl_root.to_path_buf())),
         max_request_bytes: max_req_bytes,
         max_response_bytes: max_resp_bytes,
+        max_body_array_length: 10_000,
     };
     let app = router::build(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -607,4 +608,145 @@ fn copy_dir(src: &Path, dst: &Path) {
             std::fs::copy(&src_path, &dst_path).unwrap();
         }
     }
+}
+
+// ---------- F-DM-1 — render amplification cap ----------
+
+#[tokio::test]
+async fn fdm1_oversize_top_level_array_returns_413_structured() {
+    let tmp = TempDir::new().unwrap();
+    // Simple amplification template — output size scales with
+    // items.len().
+    write_dsl(tmp.path(), "amp", "count", "{{#each items}}x{{/each}}");
+    // Spawn with a tight cap for a fast test.
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 100,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // 101 elements > cap 100.
+    let body = json!({"items": (0..101).collect::<Vec<i32>>()});
+    let resp = client
+        .post(format!("{base}/amp/count"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+    let json: Value = resp.json().await.unwrap();
+    assert_eq!(json["error"], "RequestArrayTooLarge");
+    assert_eq!(json["length"], 101);
+    assert_eq!(json["limit"], 100);
+}
+
+#[tokio::test]
+async fn fdm1_at_cap_boundary_renders_normally() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "amp", "count", "{{#each items}}x{{/each}}");
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 100,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Exactly 100 elements — at the cap, must pass.
+    let body = json!({"items": (0..100).collect::<Vec<i32>>()});
+    let resp = client
+        .post(format!("{base}/amp/count"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert_eq!(text.chars().filter(|c| *c == 'x').count(), 100);
+}
+
+#[tokio::test]
+async fn fdm1_nested_oversize_array_is_caught() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "amp", "nested", "{{{json this}}}");
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 50,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Outer array is small, but a nested array busts the cap.
+    let inner: Vec<i32> = (0..51).collect();
+    let body = json!({"outer": [{"inner": inner}]});
+    let resp = client
+        .post(format!("{base}/amp/nested"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+    let json: Value = resp.json().await.unwrap();
+    assert_eq!(json["error"], "RequestArrayTooLarge");
+    assert_eq!(json["length"], 51);
+}
+
+#[tokio::test]
+async fn fdm1_zero_cap_disables_the_check() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "amp", "count", "{{#each items}}x{{/each}}");
+    // max_body_array_length = 0 → disabled.
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 0,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Large array — would trip at cap 10000, but the cap is
+    // disabled, so it renders.
+    let body = json!({"items": (0..12345).collect::<Vec<i32>>()});
+    let resp = client
+        .post(format!("{base}/amp/count"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
 }

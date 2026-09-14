@@ -45,6 +45,25 @@ pub struct Limits {
 
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
+
+    /// Max array length permitted anywhere in the request body
+    /// JSON. Bounds the `{{#each}}` amplification lane (h2ck.me
+    /// v1 PUBLIC-EXPOSURE-FINDINGS §F-DM-1) — even a small
+    /// template like `{{#each items}}{{item}}{{/each}}`
+    /// multiplies output by `items.len()`. The `CappedWriter`
+    /// bounds the amplified output; this cap bounds the CPU cost
+    /// by refusing pathological inputs before render starts.
+    ///
+    /// Applied to every array encountered while walking the parsed
+    /// body — a nested `{items: [{nested: [...]}]}` fails on the
+    /// innermost array's length. Default `10000` covers legit use
+    /// cases (product lists, config kv arrays) while killing the
+    /// "one request pins a Tokio task for `request_timeout_secs`"
+    /// DoS lane.
+    ///
+    /// Set to `0` to disable the check.
+    #[serde(default = "default_max_body_array_length")]
+    pub max_body_array_length: usize,
 }
 
 impl Default for Limits {
@@ -53,6 +72,7 @@ impl Default for Limits {
             max_request_bytes: default_max_request_bytes(),
             max_response_bytes: default_max_response_bytes(),
             request_timeout_secs: default_request_timeout_secs(),
+            max_body_array_length: default_max_body_array_length(),
         }
     }
 }
@@ -81,6 +101,9 @@ fn default_max_response_bytes() -> usize {
 }
 fn default_request_timeout_secs() -> u64 {
     30
+}
+fn default_max_body_array_length() -> usize {
+    10_000
 }
 
 impl AppConfig {
