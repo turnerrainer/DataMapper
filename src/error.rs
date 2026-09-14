@@ -41,6 +41,15 @@ pub enum DataMapperError {
     )]
     RequestArrayTooLarge { length: usize, cap: usize },
 
+    /// h2ck.me v1 N3 — the client took longer than `deadline_secs`
+    /// to send its request body. Distinct from a render timeout
+    /// (504) because the failure happened while reading input, not
+    /// while processing it — an operator debugging a slow-loris
+    /// flood needs to distinguish "attacker holding the socket open"
+    /// from "template loop misbehaving".
+    #[error("request body not fully received within {deadline_secs}s")]
+    RequestReadTimeout { deadline_secs: u64 },
+
     #[error("rendered output exceeds limit of {limit} bytes")]
     ResponseTooLarge { limit: usize },
 
@@ -75,6 +84,7 @@ impl DataMapperError {
                 StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
             }
             DataMapperError::RequestArrayTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            DataMapperError::RequestReadTimeout { .. } => StatusCode::REQUEST_TIMEOUT,
             DataMapperError::ResponseTooLarge { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             DataMapperError::InvalidJson(_) => StatusCode::BAD_REQUEST,
             DataMapperError::InvalidPath(_) => StatusCode::BAD_REQUEST,
@@ -91,6 +101,7 @@ impl DataMapperError {
             DataMapperError::RequestTooLarge { .. } => "RequestTooLarge",
             DataMapperError::HeaderValueTooLarge { .. } => "HeaderValueTooLarge",
             DataMapperError::RequestArrayTooLarge { .. } => "RequestArrayTooLarge",
+            DataMapperError::RequestReadTimeout { .. } => "RequestReadTimeout",
             DataMapperError::ResponseTooLarge { .. } => "ResponseTooLarge",
             DataMapperError::InvalidJson(_) => "InvalidJson",
             DataMapperError::InvalidPath(_) => "InvalidPath",
@@ -160,6 +171,9 @@ impl IntoResponse for DataMapperError {
         if let DataMapperError::RequestArrayTooLarge { length, cap } = &self {
             body["length"] = json!(length);
             body["limit"] = json!(cap);
+        }
+        if let DataMapperError::RequestReadTimeout { deadline_secs } = &self {
+            body["deadline_secs"] = json!(deadline_secs);
         }
         if let DataMapperError::TemplateRenderError { view, .. } = &self {
             body["view"] = json!(view);

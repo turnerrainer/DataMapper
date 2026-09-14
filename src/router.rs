@@ -22,7 +22,7 @@
 
 use crate::error::DataMapperError;
 use crate::renderer::Renderer;
-use axum::body::Bytes;
+use axum::body::to_bytes;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
@@ -61,6 +61,13 @@ pub struct AppState {
     /// PUBLIC-EXPOSURE-FINDINGS §F-DM-1 (render amplification via
     /// `{{#each}}` over caller-controlled arrays).
     pub max_body_array_length: usize,
+    /// Wall-clock cap on how long the client has to finish sending
+    /// the request body. Same value as `limits.request_timeout_secs`
+    /// by default. Distinct concept from the render / response
+    /// timeout (both currently share the value) — the extractor
+    /// applies this cap around `to_bytes` so a slow-drip body cannot
+    /// keep a Tokio task slot occupied indefinitely (h2ck.me v1 N3).
+    pub request_timeout_secs: u64,
 }
 
 pub fn build(state: AppState) -> Router {
@@ -68,9 +75,13 @@ pub fn build(state: AppState) -> Router {
     // Coarse layer-level backstop for runaway renders. Emits 504
     // Gateway Timeout on overrun so operators can distinguish the
     // "template exploded" case (500) from the "template just took
-    // too long" case (504).
-    let timeout_layer =
-        TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, Duration::from_secs(30));
+    // too long" case (504). Reads from `limits.request_timeout_secs`
+    // (was hard-coded 30s before N3 fix — the config field is now
+    // actually wired end-to-end).
+    let timeout_layer = TimeoutLayer::with_status_code(
+        StatusCode::GATEWAY_TIMEOUT,
+        Duration::from_secs(state.request_timeout_secs),
+    );
     Router::new()
         .route("/healthz", any(healthz))
         .route("/health", any(healthz))
@@ -138,8 +149,54 @@ async fn invoke(
     State(state): State<AppState>,
     Path((project, view)): Path<(String, String)>,
     headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Response {
+    // h2ck.me v1 N3 — the pre-fix code used `body: Bytes` and
+    // relied on Axum's built-in extractor to buffer the body. The
+    // TimeoutLayer at the outer edge only starts its clock once the
+    // service future runs, but the body-read future runs INSIDE that
+    // service future — meaning a slow-drip body could keep the
+    // socket + Tokio task open for the whole read phase without ever
+    // being cancelled by the layer. Extract explicitly with our own
+    // `tokio::time::timeout` so the deadline covers exactly the
+    // period during which the socket is held open by an incomplete
+    // request.
+    //
+    // The size cap in `to_bytes(_, limit)` is authoritative for
+    // over-size 413 — the `DefaultBodyLimit` layer above sits at
+    // `limit + 4096` so its hard 413 only fires on pathological
+    // uploads (the structured JSON 413 is emitted here).
+    let deadline = Duration::from_secs(state.request_timeout_secs);
+    let body_fut = to_bytes(request.into_body(), state.max_request_bytes);
+    let body = match tokio::time::timeout(deadline, body_fut).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
+            // `to_bytes` returns Err on either size overflow or a
+            // client-side transport error. Both surface as `Error`;
+            // treat any Err as a too-large or malformed body. The
+            // structured 413 with `limit` matches the pre-fix wire
+            // shape for the size-overflow case.
+            let msg = e.to_string();
+            if msg.contains("length limit") || msg.contains("too large") {
+                return DataMapperError::RequestTooLarge {
+                    limit: state.max_request_bytes,
+                }
+                .into_response();
+            }
+            return DataMapperError::Internal(format!("reading request body: {msg}"))
+                .into_response();
+        }
+        Err(_) => {
+            tracing::warn!(
+                deadline_secs = state.request_timeout_secs,
+                "request body read exceeded deadline — closing connection (h2ck.me v1 N3)"
+            );
+            return DataMapperError::RequestReadTimeout {
+                deadline_secs: state.request_timeout_secs,
+            }
+            .into_response();
+        }
+    };
     if body.len() > state.max_request_bytes {
         return DataMapperError::RequestTooLarge {
             limit: state.max_request_bytes,

@@ -64,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         max_request_bytes: cfg.limits.max_request_bytes,
         max_response_bytes: cfg.limits.max_response_bytes,
         max_body_array_length: cfg.limits.max_body_array_length,
+        request_timeout_secs: cfg.limits.request_timeout_secs,
     };
 
     let app = router::build(state);
