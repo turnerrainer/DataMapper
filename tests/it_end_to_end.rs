@@ -608,3 +608,83 @@ fn copy_dir(src: &Path, dst: &Path) {
         }
     }
 }
+
+// ---------- FLEET §5.1 — default security headers ----------
+
+#[tokio::test]
+async fn u9_security_headers_present_on_health_response() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client.get(format!("{base}/healthz")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Every header in the fleet-standard set must be present and
+    // carry the exact fleet-standard value.
+    for (name, expected) in datamapper::security_headers::HEADERS {
+        let got = resp
+            .headers()
+            .get(*name)
+            .unwrap_or_else(|| panic!("missing security header: {name}"));
+        assert_eq!(got.to_str().unwrap(), *expected, "wrong value for {name}");
+    }
+}
+
+#[tokio::test]
+async fn u9_security_headers_present_on_error_response() {
+    // Belt-and-braces: even error paths get the headers. A
+    // TemplateNotFound response is served via `IntoResponse` from
+    // the router handler, but the middleware layers it AFTER the
+    // handler runs so the headers are attached uniformly.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/nonexistent/view"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    for (name, _) in datamapper::security_headers::HEADERS {
+        assert!(
+            resp.headers().get(*name).is_some(),
+            "missing security header on error response: {name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn u9_security_headers_do_not_clobber_handler_content_type() {
+    // Regression pin: a handler that emits its own Content-Type
+    // (application/json for the render path) must NOT have that
+    // value overwritten by the middleware. This is the
+    // `contains_key` / `insert` semantics documented in
+    // security_headers.rs.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/samples/echo"))
+        .header("content-type", "application/json")
+        .header("type", "json")
+        .body(r#"{"k":"v"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("application/json"),
+        "handler content-type was clobbered: {ct}"
+    );
+}
