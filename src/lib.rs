@@ -8,6 +8,7 @@
 //! `book/src/introduction.md` for user-facing docs.
 
 pub mod config;
+pub mod env_safety;
 pub mod error;
 pub mod helpers;
 pub mod renderer;

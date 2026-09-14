@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use datamapper::{
     config::AppConfig,
+    env_safety,
     renderer::Renderer,
     router::{self, AppState},
 };
@@ -44,16 +45,37 @@ async fn main() -> anyhow::Result<()> {
     // accessor so operators know which files the compat rewriter is
     // fixing up under the hood.
     warn_on_ported_js_dsl_syntax(&cfg.dsl_path);
-    // h2ck.me v1 L1 — DSL root MUST be read-only in production.
-    // A writable mount lets a filesystem-writer replace a `.hbs`
-    // with a symlink to any file the process can read (classic
-    // TOCTOU / symlink swap between our loader's stat and the
-    // subsequent `read_to_string`). The shipped compose file
-    // already mounts `DSL:/app/DSL:ro`; this WARN catches operators
-    // who deviated. Doesn't refuse-to-start — dev loops legitimately
-    // want a writable tree — but names the path so the deviation
-    // shows up in the boot log.
-    warn_on_writable_dsl_root(&cfg.dsl_path);
+    // FLEET-STRONGHOLDS §11 — env-aware safety gates. In non-dev
+    // environments (APP_ENV / ENVIRONMENT / DEPLOY_ENV) upgrade
+    // documented-unsafe posture WARNs to hard REFUSALS. Unknown
+    // env strings fail-safe to Production.
+    let env = env_safety::Environment::from_env();
+    tracing::info!(target: "env_safety", "detected environment: {env:?}");
+
+    // §11.2 — posture checks. DataMapper has one posture flag
+    // today: DSL root writability (h2ck.me v1 L1). Previously a
+    // WARN in every env; now REFUSES in non-dev.
+    let writable = is_dsl_root_writable(&cfg.dsl_path);
+    let posture_checks = vec![env_safety::PostureCheck {
+        name: "dsl.root_writable",
+        is_safe: !writable,
+        description: "DSL root is writable by the DataMapper process — a filesystem writer can \
+             swap a .hbs for a symlink to any process-readable file (TOCTOU).",
+        fix: "mount the DSL tree read-only (compose: `DSL:/app/DSL:ro`) OR set APP_ENV=dev",
+    }];
+    if let Err(msg) = env_safety::enforce_posture(env, &posture_checks) {
+        return Err(anyhow::anyhow!(msg));
+    }
+
+    // §11.3 — dev-fixture DSL gate. Refuses to load any .hbs whose
+    // path matches a documented dev/mock/test pattern
+    // (`dev-login`, `mock-`, `-mock`, `/test/`, `example-`,
+    // `-example`, `/dev/`, `/mocks/`) in non-dev environments. In
+    // dev, matches produce WARN and boot continues.
+    let dev_fixture_action = env_safety::DevFixtureAction::from_env(env);
+    if let Err(msg) = env_safety::enforce_dev_fixture_scan(&cfg.dsl_path, dev_fixture_action) {
+        return Err(anyhow::anyhow!(msg));
+    }
 
     let state = AppState {
         renderer: Arc::new(Renderer::new(cfg.dsl_path.clone())),
@@ -73,14 +95,22 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Emit a WARN if the DSL root — or any subdirectory beneath it —
-/// is writable by the current process UID. See L1 in `SECURITY.md`
-/// for the deployment posture this guards against.
-fn warn_on_writable_dsl_root(dsl_root: &std::path::Path) {
+/// Return true if the DSL root — or any subdirectory beneath it,
+/// up to depth 3 — is writable by the current process UID.
+///
+/// Uses a probe-file write (`OpenOptions::create_new(true).write(true)`)
+/// rather than a mode-bit check so that Docker `:ro` mount overrides
+/// are honoured — a directory with `0755` mode still returns `false`
+/// when the underlying mount is read-only, which is the case we
+/// actually care about.
+///
+/// Consumed by both the FLEET §11.2 posture check (drives boot
+/// refusal in non-dev) and, indirectly, by the ops-facing WARN log
+/// line the posture check emits in dev.
+fn is_dsl_root_writable(dsl_root: &std::path::Path) -> bool {
     if !dsl_root.exists() {
-        return;
+        return false;
     }
-    let mut writable_paths: Vec<String> = Vec::new();
     for entry in walkdir::WalkDir::new(dsl_root)
         .max_depth(3)
         .into_iter()
@@ -90,19 +120,11 @@ fn warn_on_writable_dsl_root(dsl_root: &std::path::Path) {
             continue;
         }
         if is_writable_by_us(entry.path()) {
-            writable_paths.push(entry.path().display().to_string());
-        }
-        if writable_paths.len() >= 5 {
-            break;
+            tracing::debug!(path = %entry.path().display(), "writable DSL directory");
+            return true;
         }
     }
-    if !writable_paths.is_empty() {
-        tracing::warn!(
-            "DSL root is writable by the DataMapper process ({}) — production deployments MUST mount the DSL tree read-only \
-             (compose: `DSL:/app/DSL:ro`) to defeat symlink-swap and TOCTOU attacks on template files. See SECURITY.md.",
-            writable_paths.join(", "),
-        );
-    }
+    false
 }
 
 /// Best-effort check: can this process write into `path`?
