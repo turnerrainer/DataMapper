@@ -21,6 +21,15 @@ pub enum DataMapperError {
     #[error("request body exceeds limit of {limit} bytes")]
     RequestTooLarge { limit: usize },
 
+    /// h2ck.me v1 BREAK-TESTS/RUNTIME-FINDINGS.md §N8 — a single
+    /// request header exceeded the operator-configured value size
+    /// cap. Hyper's default per-header cap is generous (400+ KiB);
+    /// this middleware-level check rejects at the application layer
+    /// with a structured 431 so an operator's WAF / log aggregator
+    /// sees the standard shape.
+    #[error("request header value of {actual} bytes exceeds cap {cap}")]
+    HeaderValueTooLarge { actual: usize, cap: usize },
+
     #[error("rendered output exceeds limit of {limit} bytes")]
     ResponseTooLarge { limit: usize },
 
@@ -51,6 +60,9 @@ impl DataMapperError {
             DataMapperError::TemplateNotFound { .. } => StatusCode::NOT_FOUND,
             DataMapperError::TemplateRenderError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             DataMapperError::RequestTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            DataMapperError::HeaderValueTooLarge { .. } => {
+                StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+            }
             DataMapperError::ResponseTooLarge { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             DataMapperError::InvalidJson(_) => StatusCode::BAD_REQUEST,
             DataMapperError::InvalidPath(_) => StatusCode::BAD_REQUEST,
@@ -65,6 +77,7 @@ impl DataMapperError {
             DataMapperError::TemplateNotFound { .. } => "TemplateNotFound",
             DataMapperError::TemplateRenderError { .. } => "TemplateRenderError",
             DataMapperError::RequestTooLarge { .. } => "RequestTooLarge",
+            DataMapperError::HeaderValueTooLarge { .. } => "HeaderValueTooLarge",
             DataMapperError::ResponseTooLarge { .. } => "ResponseTooLarge",
             DataMapperError::InvalidJson(_) => "InvalidJson",
             DataMapperError::InvalidPath(_) => "InvalidPath",
@@ -90,6 +103,10 @@ impl IntoResponse for DataMapperError {
         | DataMapperError::ResponseTooLarge { limit } = &self
         {
             body["limit"] = json!(limit);
+        }
+        if let DataMapperError::HeaderValueTooLarge { actual, cap } = &self {
+            body["actual"] = json!(actual);
+            body["limit"] = json!(cap);
         }
         if let DataMapperError::TemplateRenderError { view, .. } = &self {
             body["view"] = json!(view);
