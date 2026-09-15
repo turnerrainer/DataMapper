@@ -2,22 +2,103 @@
 //!
 //! Assembles: config → renderer → axum router → server. Binds on
 //! `0.0.0.0:<config.port>`.
+//!
+//! **Subcommands** (FLEET §8.2):
+//! - default / `serve` — run the HTTP server (behaviour identical
+//!   to pre-clap boot).
+//! - `doctor [--strict]` — validate config + DSL tree + env
+//!   without starting the server. Prints one line per check with a
+//!   `[ok]/[warn]/[error]` prefix; exits `1` on any error (or on
+//!   any warn when `--strict`).
 
+use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 
+use clap::{Parser, Subcommand};
 use datamapper::{
     config::AppConfig,
+    doctor, env_safety,
     renderer::Renderer,
     router::{self, AppState},
 };
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+#[derive(Parser)]
+#[command(name = "datamapper", version, about, long_about = None)]
+struct Cli {
+    /// Explicit config file path — overrides the
+    /// `DATAMAPPER_CONFIG` env and the default search order.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the HTTP server (default).
+    Serve,
+    /// Validate config + DSL tree + environment without starting
+    /// the server. Prints one line per check; exits non-zero on
+    /// error.
+    Doctor {
+        /// Exit non-zero on any WARN, not just ERROR.
+        #[arg(long)]
+        strict: bool,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    // Set DATAMAPPER_CONFIG from --config once, so both `serve`
+    // and `doctor` see the same config-search behaviour.
+    if let Some(path) = &cli.config {
+        std::env::set_var("DATAMAPPER_CONFIG", path);
+    }
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("Error: failed to start tokio runtime: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match rt.block_on(serve()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("Error: {e:?}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Doctor { strict } => run_doctor(cli.config.as_deref(), strict),
+    }
+}
+
+fn run_doctor(config_override: Option<&std::path::Path>, strict: bool) -> ExitCode {
+    // Doctor deliberately does NOT initialise tracing — its output
+    // goes to stdout in a stable one-line-per-check format that
+    // operators can grep. Tracing to stderr would mix in noise.
+    let diagnostics = doctor::run(config_override);
+    doctor::print(&diagnostics);
+    match doctor::exit_code(&diagnostics, strict) {
+        0 => ExitCode::SUCCESS,
+        _ => ExitCode::FAILURE,
+    }
+}
+
+async fn serve() -> anyhow::Result<()> {
+    // Audit LOG-v1 FN-LOG-1: emit ANSI colour codes only when stderr is
+    // a TTY. Under Docker / systemd, ship plain-text logs for SIEM.
+    use std::io::IsTerminal;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     let version = env!("CARGO_PKG_VERSION");
@@ -44,21 +125,51 @@ async fn main() -> anyhow::Result<()> {
     // accessor so operators know which files the compat rewriter is
     // fixing up under the hood.
     warn_on_ported_js_dsl_syntax(&cfg.dsl_path);
-    // h2ck.me v1 L1 — DSL root MUST be read-only in production.
-    // A writable mount lets a filesystem-writer replace a `.hbs`
-    // with a symlink to any file the process can read (classic
-    // TOCTOU / symlink swap between our loader's stat and the
-    // subsequent `read_to_string`). The shipped compose file
-    // already mounts `DSL:/app/DSL:ro`; this WARN catches operators
-    // who deviated. Doesn't refuse-to-start — dev loops legitimately
-    // want a writable tree — but names the path so the deviation
-    // shows up in the boot log.
-    warn_on_writable_dsl_root(&cfg.dsl_path);
+    // h2ck.me v1 N1 — WARN per template that uses a non-json
+    // triple-brace (`{{{X}}}`) mustache expression. The runtime
+    // backstop in `router::respond` forces `text/plain` on those
+    // templates' fallback responses, but boot visibility lets
+    // operators find and audit the affected DSLs.
+    warn_on_unsafe_raw_output_templates(&cfg.dsl_path);
+
+    // FLEET-STRONGHOLDS §11 — env-aware safety gates. In non-dev
+    // environments (APP_ENV / ENVIRONMENT / DEPLOY_ENV) upgrade
+    // documented-unsafe posture WARNs to hard REFUSALS. Unknown
+    // env strings fail-safe to Production.
+    let env = env_safety::Environment::from_env();
+    tracing::info!(target: "env_safety", "detected environment: {env:?}");
+
+    // §11.2 — posture checks. DataMapper has one posture flag
+    // today: DSL root writability (h2ck.me v1 L1). Previously a
+    // WARN in every env; now REFUSES in non-dev.
+    let writable = is_dsl_root_writable(&cfg.dsl_path);
+    let posture_checks = vec![env_safety::PostureCheck {
+        name: "dsl.root_writable",
+        is_safe: !writable,
+        description: "DSL root is writable by the DataMapper process — a filesystem writer can \
+             swap a .hbs for a symlink to any process-readable file (TOCTOU).",
+        fix: "mount the DSL tree read-only (compose: `DSL:/app/DSL:ro`) OR set APP_ENV=dev",
+    }];
+    if let Err(msg) = env_safety::enforce_posture(env, &posture_checks) {
+        return Err(anyhow::anyhow!(msg));
+    }
+
+    // §11.3 — dev-fixture DSL gate. Refuses to load any .hbs whose
+    // path matches a documented dev/mock/test pattern
+    // (`dev-login`, `mock-`, `-mock`, `/test/`, `example-`,
+    // `-example`, `/dev/`, `/mocks/`) in non-dev environments. In
+    // dev, matches produce WARN and boot continues.
+    let dev_fixture_action = env_safety::DevFixtureAction::from_env(env);
+    if let Err(msg) = env_safety::enforce_dev_fixture_scan(&cfg.dsl_path, dev_fixture_action) {
+        return Err(anyhow::anyhow!(msg));
+    }
 
     let state = AppState {
         renderer: Arc::new(Renderer::new(cfg.dsl_path.clone())),
         max_request_bytes: cfg.limits.max_request_bytes,
         max_response_bytes: cfg.limits.max_response_bytes,
+        max_body_array_length: cfg.limits.max_body_array_length,
+        request_timeout_secs: cfg.limits.request_timeout_secs,
     };
 
     let app = router::build(state);
@@ -73,14 +184,68 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Emit a WARN if the DSL root — or any subdirectory beneath it —
-/// is writable by the current process UID. See L1 in `SECURITY.md`
-/// for the deployment posture this guards against.
-fn warn_on_writable_dsl_root(dsl_root: &std::path::Path) {
-    if !dsl_root.exists() {
+/// Emit a per-template WARN for every `.hbs` under `dsl_root` that
+/// contains a `{{{X}}}` triple-brace mustache expression whose inner
+/// form is NOT the built-in `json` helper. See h2ck.me v1 N1 in
+/// `SECURITY.md` for the composite-XSS lane this catches.
+///
+/// The runtime backstop in `router::respond` already deterministic-
+/// ally forces `text/plain` on affected templates' fallback
+/// responses — this walk exists so an operator (a) sees which files
+/// need auditing at boot time and (b) can excise the raw output if
+/// the response was legitimately expected to be HTML.
+fn warn_on_unsafe_raw_output_templates(dsl_root: &std::path::Path) {
+    if !dsl_root.is_dir() {
         return;
     }
-    let mut writable_paths: Vec<String> = Vec::new();
+    let mut affected: Vec<String> = Vec::new();
+    for entry in walkdir::WalkDir::new(dsl_root)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if entry.path().extension().and_then(|s| s.to_str()) != Some("hbs") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if datamapper::renderer::contains_unsafe_raw_output(&body) {
+            if let Ok(rel) = entry.path().strip_prefix(dsl_root) {
+                affected.push(rel.display().to_string());
+            }
+        }
+    }
+    if !affected.is_empty() {
+        let shown: Vec<String> = affected.iter().take(10).cloned().collect();
+        tracing::warn!(
+            "{} template(s) under {} use `{{{{{{X}}}}}}` (non-json triple-brace / raw output) — the runtime forces text/plain on their fallback responses (h2ck.me v1 N1). Audit and prefer `{{{{X}}}}` (double-brace, HTML-escaped) unless the response is JSON-shaped: {}{}",
+            affected.len(),
+            dsl_root.display(),
+            shown.join(", "),
+            if affected.len() > shown.len() {
+                format!(", … +{} more", affected.len() - shown.len())
+            } else {
+                String::new()
+            },
+        );
+    }
+}
+
+/// Return true if the DSL root — or any subdirectory beneath it,
+/// up to depth 3 — is writable by the current process UID.
+///
+/// Uses a probe-file write (`OpenOptions::create_new(true).write(true)`)
+/// rather than a mode-bit check so that Docker `:ro` mount overrides
+/// are honoured — a directory with `0755` mode still returns `false`
+/// when the underlying mount is read-only, which is the case we
+/// actually care about.
+///
+/// Consumed by the FLEET §11.2 posture check (drives boot refusal
+/// in non-dev, WARN-only in dev).
+fn is_dsl_root_writable(dsl_root: &std::path::Path) -> bool {
+    if !dsl_root.exists() {
+        return false;
+    }
     for entry in walkdir::WalkDir::new(dsl_root)
         .max_depth(3)
         .into_iter()
@@ -90,19 +255,11 @@ fn warn_on_writable_dsl_root(dsl_root: &std::path::Path) {
             continue;
         }
         if is_writable_by_us(entry.path()) {
-            writable_paths.push(entry.path().display().to_string());
-        }
-        if writable_paths.len() >= 5 {
-            break;
+            tracing::debug!(path = %entry.path().display(), "writable DSL directory");
+            return true;
         }
     }
-    if !writable_paths.is_empty() {
-        tracing::warn!(
-            "DSL root is writable by the DataMapper process ({}) — production deployments MUST mount the DSL tree read-only \
-             (compose: `DSL:/app/DSL:ro`) to defeat symlink-swap and TOCTOU attacks on template files. See SECURITY.md.",
-            writable_paths.join(", "),
-        );
-    }
+    false
 }
 
 /// Best-effort check: can this process write into `path`?

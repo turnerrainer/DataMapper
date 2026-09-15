@@ -25,6 +25,27 @@ pub struct Renderer {
     dsl_root: PathBuf,
 }
 
+/// A completed render, plus the metadata the response layer needs
+/// to decide how to shape the response.
+#[derive(Debug, Clone)]
+pub struct RenderOutcome {
+    /// Rendered template output.
+    pub body: String,
+    /// True iff the template source contained a `{{{X}}}`
+    /// (triple-brace, un-escaped) mustache expression where the
+    /// inner form is NOT the built-in `json` helper.
+    ///
+    /// h2ck.me v1 break-test N1: the original v1 M1 fix
+    /// (docs-only) plus the M2 fix (opt-in HTML fallback) still
+    /// leaves a composite XSS lane — an attacker sending
+    /// `Accept: text/html` against a template written with
+    /// `{{{userInput}}}` gets HTML back with attacker markup
+    /// verbatim. When this flag is set, the router forces
+    /// `text/plain` on the JSON-detection fallback path
+    /// regardless of `Accept`, closing the lane deterministically.
+    pub has_unsafe_raw_output: bool,
+}
+
 impl Renderer {
     pub fn new(dsl_root: PathBuf) -> Self {
         let mut reg = Handlebars::new();
@@ -60,7 +81,7 @@ impl Renderer {
         view: &str,
         context: &Value,
         response_cap: usize,
-    ) -> Result<String, DataMapperError> {
+    ) -> Result<RenderOutcome, DataMapperError> {
         let project = sanitize_segment(project)?;
         let view = sanitize_segment(&strip_hbs(view))?;
 
@@ -111,12 +132,22 @@ impl Renderer {
             raw
         };
 
+        // Detect on the RAW body (pre-rewrite) so a template
+        // written as `{{{ name }}}` and passed through
+        // `rewrite_dot_length` still reports its unsafe shape
+        // faithfully — the rewrite only ever touches `.length`
+        // accessor paths, not triple-brace boundaries.
+        let has_unsafe_raw_output = contains_unsafe_raw_output(&body);
+
         let mut writer = CappedWriter::new(response_cap);
         match self
             .reg
             .render_template_to_write(&body, context, &mut writer)
         {
-            Ok(()) => Ok(writer.into_string()),
+            Ok(()) => Ok(RenderOutcome {
+                body: writer.into_string(),
+                has_unsafe_raw_output,
+            }),
             Err(e) => {
                 if writer.cap_hit {
                     Err(DataMapperError::ResponseTooLarge {
@@ -346,6 +377,88 @@ pub fn contains_dot_length_accessor(template: &str) -> bool {
     false
 }
 
+/// Scan a template source for `{{{X}}}` (triple-brace, un-escaped)
+/// mustache expressions where the inner form is anything other than
+/// the built-in `json` helper. Returns true on the first such
+/// occurrence.
+///
+/// Legitimate triple-brace use in DataMapper is `{{{json obj}}}` —
+/// the helper produces a valid JSON literal and the response
+/// negotiation path parses it back to a `serde_json::Value` (see
+/// `router::respond`). Any other triple-brace form is un-escaped
+/// output — attacker-influenced request body reaches the response as
+/// executable markup if the client sent `Accept: text/html`. This is
+/// the h2ck.me v1 N1 composite-XSS lane.
+///
+/// Comment blocks (`{{! ... }}` / `{{!-- ... --}}`) are skipped so
+/// documentation examples inside a template don't flip the flag.
+///
+/// The scanner is intentionally lenient about the inner form: any
+/// leading whitespace + `json` + whitespace-terminator counts as the
+/// safe form (matching handlebars-rust's helper-name parsing). A
+/// helper named `jsonfoo` would (correctly) still flag as unsafe
+/// because the token boundary check rejects the suffix.
+pub fn contains_unsafe_raw_output(template: &str) -> bool {
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        // Skip comment blocks first — they can carry arbitrary
+        // triple-brace-shaped strings inside without meaning what
+        // they'd otherwise mean.
+        if bytes[i] == b'{' && bytes[i + 1] == b'{' && bytes[i + 2] == b'!' {
+            // `{{! ... }}` or `{{!-- ... --}}`.
+            let close = find_close(bytes, i + 2);
+            i = close;
+            continue;
+        }
+        // Only interested in triple-brace openers.
+        if !(bytes[i] == b'{' && bytes[i + 1] == b'{' && bytes[i + 2] == b'{') {
+            i += 1;
+            continue;
+        }
+        // Find the closing `}}}` — allow the two-brace close too
+        // for defensive purposes, though a well-formed handlebars
+        // template pairs triple-open with triple-close.
+        let close = find_close(bytes, i + 3);
+        // `close` points just past the closing braces. The inner
+        // body sits between `i+3` and `close - close_len`.
+        let close_len = if close >= 3
+            && close <= bytes.len()
+            && bytes.get(close - 1) == Some(&b'}')
+            && bytes.get(close - 2) == Some(&b'}')
+            && bytes.get(close - 3) == Some(&b'}')
+        {
+            3
+        } else {
+            2
+        };
+        let inner_end = close.saturating_sub(close_len);
+        let inner = template[i + 3..inner_end].trim();
+        if !is_safe_json_helper_call(inner) {
+            return true;
+        }
+        i = close;
+    }
+    false
+}
+
+/// True iff `inner` (the trimmed body between `{{{` and `}}}`) is a
+/// call to the built-in `json` helper — i.e. it starts with `json`
+/// followed by whitespace or end-of-string. Anything else — including
+/// bare field references like `name`, similarly-named helpers like
+/// `jsonfoo`, or any expression not starting with `json` — is treated
+/// as unsafe un-escaped output.
+fn is_safe_json_helper_call(inner: &str) -> bool {
+    let Some(rest) = inner.strip_prefix("json") else {
+        return false;
+    };
+    // Empty rest → the whole inner IS "json" (no args). That's still
+    // a helper reference (renders empty), not a raw-value escape.
+    // Non-empty rest → must start with whitespace for `json` to be a
+    // helper name (rather than an identifier prefix like `jsonfoo`).
+    rest.is_empty() || rest.starts_with(char::is_whitespace)
+}
+
 fn has_dot_length_token(body: &str) -> bool {
     // Match `.length` where `length` is a full identifier terminator
     // (not `.lengthX` or `.length_x`). Split-and-check is simpler
@@ -437,5 +550,78 @@ mod tests {
         assert_eq!(strip_hbs("foo.hbs"), "foo");
         assert_eq!(strip_hbs("foo"), "foo");
         assert_eq!(strip_hbs("bar.hbs.hbs"), "bar.hbs");
+    }
+
+    // ---------- N1 — composite triple-brace XSS scanner ----------
+
+    #[test]
+    fn n1_bare_triple_brace_field_is_unsafe() {
+        assert!(contains_unsafe_raw_output("<h1>{{{name}}}</h1>"));
+        assert!(contains_unsafe_raw_output("{{{ user_input }}}"));
+        assert!(contains_unsafe_raw_output("prefix {{{data.field}}} suffix"));
+    }
+
+    #[test]
+    fn n1_json_helper_call_is_safe() {
+        // Legit usage — `{{{json obj}}}` produces a JSON literal.
+        assert!(!contains_unsafe_raw_output("{{{json data}}}"));
+        assert!(!contains_unsafe_raw_output("{{{ json  obj }}}"));
+        assert!(!contains_unsafe_raw_output(
+            "{\n  \"payload\": {{{ json body }}}\n}"
+        ));
+        // Bare `{{{json}}}` (no arg) is still a helper reference and
+        // renders empty — not an un-escaped user value.
+        assert!(!contains_unsafe_raw_output("{{{json}}}"));
+    }
+
+    #[test]
+    fn n1_prefix_match_on_json_is_still_unsafe() {
+        // A helper named `jsonfoo` would need whitespace after `json`
+        // to count as safe. Without it, it's a different identifier.
+        assert!(contains_unsafe_raw_output("{{{jsonfoo bar}}}"));
+        assert!(contains_unsafe_raw_output("{{{jsonpath obj}}}"));
+    }
+
+    #[test]
+    fn n1_double_brace_is_never_flagged() {
+        // The double-brace form is HTML-escaped by handlebars-rust.
+        assert!(!contains_unsafe_raw_output("{{name}}"));
+        assert!(!contains_unsafe_raw_output("<h1>Hello {{user_input}}</h1>"));
+    }
+
+    #[test]
+    fn n1_comment_blocks_are_ignored() {
+        // Comments describing the unsafe pattern must NOT flip the
+        // flag — otherwise the safety docs in book examples would
+        // taint every fixture.
+        assert!(!contains_unsafe_raw_output(
+            "{{! do not do {{{name}}} here }}"
+        ));
+        assert!(!contains_unsafe_raw_output(
+            "{{!-- example bug: {{{userInput}}} --}}"
+        ));
+    }
+
+    #[test]
+    fn n1_no_mustache_returns_false() {
+        assert!(!contains_unsafe_raw_output("plain text"));
+        assert!(!contains_unsafe_raw_output(""));
+        assert!(!contains_unsafe_raw_output("{"));
+        assert!(!contains_unsafe_raw_output("}}}"));
+    }
+
+    #[test]
+    fn n1_mixed_safe_and_unsafe_returns_true() {
+        // First unsafe form wins.
+        assert!(contains_unsafe_raw_output(
+            "{\n  \"safe\": {{{json obj}}},\n  \"raw\": {{{name}}}\n}"
+        ));
+    }
+
+    #[test]
+    fn n1_helper_identifier_boundary_at_end_of_input() {
+        // `{{{json}}}` (helper with no arg, no trailing whitespace).
+        // Rest after stripping "json" is empty → treated as safe.
+        assert!(!contains_unsafe_raw_output("{{{json}}}"));
     }
 }

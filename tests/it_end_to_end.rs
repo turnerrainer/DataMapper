@@ -25,10 +25,23 @@ fn write_dsl(dsl_root: &Path, project: &str, view: &str, body: &str) {
 /// Spawn the DataMapper HTTP server on an ephemeral port bound to
 /// `127.0.0.1:0`. Returns the base URL for the client to hit.
 async fn spawn_server(dsl_root: &Path, max_req_bytes: usize, max_resp_bytes: usize) -> String {
+    spawn_server_with_timeout(dsl_root, max_req_bytes, max_resp_bytes, 30).await
+}
+
+/// Same as [`spawn_server`] but with an explicit
+/// `request_timeout_secs` — used by the N3 slow-body regression pin.
+async fn spawn_server_with_timeout(
+    dsl_root: &Path,
+    max_req_bytes: usize,
+    max_resp_bytes: usize,
+    request_timeout_secs: u64,
+) -> String {
     let state = AppState {
         renderer: Arc::new(Renderer::new(dsl_root.to_path_buf())),
         max_request_bytes: max_req_bytes,
         max_response_bytes: max_resp_bytes,
+        max_body_array_length: 10_000,
+        request_timeout_secs,
     };
     let app = router::build(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -607,4 +620,696 @@ fn copy_dir(src: &Path, dst: &Path) {
             std::fs::copy(&src_path, &dst_path).unwrap();
         }
     }
+}
+
+// ---------- FLEET §5.1 — default security headers ----------
+
+#[tokio::test]
+async fn u9_security_headers_present_on_health_response() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client.get(format!("{base}/healthz")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Every header in the fleet-standard set must be present and
+    // carry the exact fleet-standard value.
+    for (name, expected) in datamapper::security_headers::HEADERS {
+        let got = resp
+            .headers()
+            .get(*name)
+            .unwrap_or_else(|| panic!("missing security header: {name}"));
+        assert_eq!(got.to_str().unwrap(), *expected, "wrong value for {name}");
+    }
+}
+
+#[tokio::test]
+async fn u9_security_headers_present_on_error_response() {
+    // Belt-and-braces: even error paths get the headers. A
+    // TemplateNotFound response is served via `IntoResponse` from
+    // the router handler, but the middleware layers it AFTER the
+    // handler runs so the headers are attached uniformly.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/nonexistent/view"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    for (name, _) in datamapper::security_headers::HEADERS {
+        assert!(
+            resp.headers().get(*name).is_some(),
+            "missing security header on error response: {name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn u9_security_headers_do_not_clobber_handler_content_type() {
+    // Regression pin: a handler that emits its own Content-Type
+    // (application/json for the render path) must NOT have that
+    // value overwritten by the middleware. This is the
+    // `contains_key` / `insert` semantics documented in
+    // security_headers.rs.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/samples/echo"))
+        .header("content-type", "application/json")
+        .header("type", "json")
+        .body(r#"{"k":"v"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("application/json"),
+        "handler content-type was clobbered: {ct}"
+    );
+}
+
+// ---------- FLEET §1.6 — W3C traceparent response header ----------
+
+#[tokio::test]
+async fn o1_every_response_carries_traceparent_headers() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client.get(format!("{base}/healthz")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .expect("traceparent header missing")
+        .to_str()
+        .unwrap()
+        .to_string();
+    // Shape: 00-<32 hex>-<16 hex>-01
+    let parts: Vec<&str> = tp.split('-').collect();
+    assert_eq!(parts.len(), 4, "traceparent must have 4 dashed parts: {tp}");
+    assert_eq!(parts[0], "00", "version must be 00");
+    assert_eq!(parts[1].len(), 32, "trace id must be 32 hex chars");
+    assert_eq!(parts[2].len(), 16, "span id must be 16 hex chars");
+    assert_eq!(parts[3], "01", "flags must be 01");
+
+    // x-trace-id mirrors the traceparent's trace id.
+    let xid = resp
+        .headers()
+        .get("x-trace-id")
+        .expect("x-trace-id header missing")
+        .to_str()
+        .unwrap();
+    assert_eq!(xid, parts[1], "x-trace-id must equal traceparent trace id");
+}
+
+#[tokio::test]
+async fn o1_inbound_traceparent_is_inherited() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let inbound_trace = "0af7651916cd43dd8448eb211c80319c";
+    let inbound = format!("00-{inbound_trace}-b7ad6b7169203331-01");
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("traceparent", &inbound)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let parts: Vec<&str> = tp.split('-').collect();
+    assert_eq!(
+        parts[1], inbound_trace,
+        "trace id must be inherited from inbound header, got: {tp}"
+    );
+    // Span id must be REGENERATED — this service's span, not the
+    // caller's.
+    assert_ne!(
+        parts[2], "b7ad6b7169203331",
+        "span id must be freshly generated, not echoed"
+    );
+}
+
+#[tokio::test]
+async fn o1_malformed_inbound_traceparent_gets_fresh_id() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("traceparent", "totally-malformed")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let parts: Vec<&str> = tp.split('-').collect();
+    // Fresh id — must be well-formed even though inbound was junk.
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[1].len(), 32);
+    assert!(parts[1].chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[tokio::test]
+async fn o1_all_zero_inbound_trace_id_rejected() {
+    // W3C spec reserves all-zeros trace id as invalid.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header(
+            "traceparent",
+            "00-00000000000000000000000000000000-b7ad6b7169203331-01",
+        )
+        .send()
+        .await
+        .unwrap();
+    let tp = resp
+        .headers()
+        .get("traceparent")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let parts: Vec<&str> = tp.split('-').collect();
+    assert_ne!(
+        parts[1], "00000000000000000000000000000000",
+        "all-zeros trace id must be rejected and regenerated: {tp}"
+    );
+}
+
+#[tokio::test]
+async fn o1_traceparent_present_on_error_response_too() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/nonexistent/view"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert!(
+        resp.headers().get("traceparent").is_some(),
+        "traceparent missing on error response"
+    );
+    assert!(
+        resp.headers().get("x-trace-id").is_some(),
+        "x-trace-id missing on error response"
+    );
+}
+
+// ---------- N8 — per-header value size cap ----------
+
+#[tokio::test]
+async fn n8_oversize_single_header_returns_431_structured() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    // 10 KB header value — 2 KB over the 8 KB middleware cap.
+    let huge = "X".repeat(10 * 1024);
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("x-attacker-header", &huge)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 431);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "HeaderValueTooLarge");
+    assert_eq!(body["limit"], 8 * 1024);
+    assert!(body["actual"].as_u64().unwrap() >= 10 * 1024);
+}
+
+#[tokio::test]
+async fn n8_at_cap_boundary_admits_request() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    // Exactly 8192 bytes — at the cap; `>`, not `>=`, so admits.
+    let at_cap = "X".repeat(8 * 1024);
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("x-large-but-legit", &at_cap)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn n8_small_headers_admitted() {
+    // Sanity: normal-shaped requests are unaffected. The N8 fix must
+    // not regress the happy path.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/healthz"))
+        .header("authorization", "Bearer some-normal-jwt-shape-token")
+        .header("accept", "application/json")
+        .header("x-request-id", "abc-123-def")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+// ---------- N5 — 404 tried-path echo clipping ----------
+
+#[tokio::test]
+async fn n5_notfound_tried_paths_clipped_at_256_chars() {
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    // 10 KB view segment. Pre-fix, the 404 body echoed both
+    // attempted paths in full (~20 KB response). Post-fix, each
+    // tried entry caps at ~256 chars.
+    let long = "a".repeat(10_000);
+    let resp = client
+        .post(format!("{base}/attack/{long}"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "TemplateNotFound");
+    let tried = body["tried"].as_array().expect("tried is a JSON array");
+    for entry in tried {
+        let s = entry.as_str().unwrap();
+        assert!(
+            s.chars().count() <= 300,
+            "N5 fail: tried entry too long: {} chars",
+            s.chars().count()
+        );
+        assert!(
+            s.contains("[truncated]"),
+            "expected truncation marker on long entry: {s}"
+        );
+    }
+}
+
+// ---------- N6 — unified 404 shape across router + fallback ----------
+
+#[tokio::test]
+async fn n6_encoded_traversal_yields_structured_notfound() {
+    // Path-encoded traversal — Axum decodes %2F into slashes and
+    // the URL no longer matches `/:project/*view`, so it hits the
+    // global fallback. Pre-fix, that returned an empty body with
+    // no content-type. Post-fix, the fallback emits the same
+    // structured JSON shape.
+    let tmp = TempDir::new().unwrap();
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/..%2F..%2Fetc%2Fpasswd"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.contains("application/json"),
+        "N6 fail: fallback must be JSON, got: {ct}"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "NotFound");
+    assert!(body["message"].is_string());
+}
+
+// ---------- F-DM-1 — render amplification cap ----------
+
+#[tokio::test]
+async fn fdm1_oversize_top_level_array_returns_413_structured() {
+    let tmp = TempDir::new().unwrap();
+    // Simple amplification template — output size scales with
+    // items.len().
+    write_dsl(tmp.path(), "amp", "count", "{{#each items}}x{{/each}}");
+    // Spawn with a tight cap for a fast test.
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 100,
+        request_timeout_secs: 30,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // 101 elements > cap 100.
+    let body = json!({"items": (0..101).collect::<Vec<i32>>()});
+    let resp = client
+        .post(format!("{base}/amp/count"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+    let json: Value = resp.json().await.unwrap();
+    assert_eq!(json["error"], "RequestArrayTooLarge");
+    assert_eq!(json["length"], 101);
+    assert_eq!(json["limit"], 100);
+}
+
+#[tokio::test]
+async fn fdm1_at_cap_boundary_renders_normally() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "amp", "count", "{{#each items}}x{{/each}}");
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 100,
+        request_timeout_secs: 30,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Exactly 100 elements — at the cap, must pass.
+    let body = json!({"items": (0..100).collect::<Vec<i32>>()});
+    let resp = client
+        .post(format!("{base}/amp/count"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert_eq!(text.chars().filter(|c| *c == 'x').count(), 100);
+}
+
+#[tokio::test]
+async fn fdm1_nested_oversize_array_is_caught() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "amp", "nested", "{{{json this}}}");
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 50,
+        request_timeout_secs: 30,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Outer array is small, but a nested array busts the cap.
+    let inner: Vec<i32> = (0..51).collect();
+    let body = json!({"outer": [{"inner": inner}]});
+    let resp = client
+        .post(format!("{base}/amp/nested"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+    let json: Value = resp.json().await.unwrap();
+    assert_eq!(json["error"], "RequestArrayTooLarge");
+    assert_eq!(json["length"], 51);
+}
+
+#[tokio::test]
+async fn fdm1_zero_cap_disables_the_check() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "amp", "count", "{{#each items}}x{{/each}}");
+    // max_body_array_length = 0 → disabled.
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        max_response_bytes: 16 * 1024 * 1024,
+        max_body_array_length: 0,
+        request_timeout_secs: 30,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Large array — would trip at cap 10000, but the cap is
+    // disabled, so it renders.
+    let body = json!({"items": (0..12345).collect::<Vec<i32>>()});
+    let resp = client
+        .post(format!("{base}/amp/count"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+// ---------- N3 slow-body / slow-loris regression pin ----------
+
+/// h2ck.me v1 BREAK-TESTS/RUNTIME-FINDINGS.md §N3 (MEDIUM) —
+/// pre-fix, a client that dripped a request body one byte at a time
+/// could keep a Tokio task slot open indefinitely; the outer
+/// `TimeoutLayer` only starts its clock once the service future
+/// runs, and body extraction happens inside that service future.
+///
+/// This test opens a raw TCP connection to the server, sends a valid
+/// HTTP request line + headers, then dribbles the body across
+/// several seconds while the server is configured with a 1-second
+/// timeout. The server must close with a 408 `RequestReadTimeout`
+/// well under the drip total.
+#[tokio::test]
+async fn n3_slow_body_read_hits_deadline() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpStream;
+
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    // 1-second body-read deadline so the test finishes fast.
+    let base = spawn_server_with_timeout(tmp.path(), 2 * 1024 * 1024, 16 * 1024 * 1024, 1).await;
+    let host_port = base.trim_start_matches("http://").to_string();
+
+    let mut stream = TcpStream::connect(&host_port).await.unwrap();
+
+    // Announce a 200-byte body but never actually send it. The
+    // server must close the connection or 408 within the 1s
+    // deadline.
+    let head = "POST /samples/echo HTTP/1.1\r\n\
+                Host: localhost\r\n\
+                Content-Type: application/json\r\n\
+                Content-Length: 200\r\n\
+                Connection: close\r\n\
+                \r\n";
+    stream.write_all(head.as_bytes()).await.unwrap();
+    // Send one byte, then stall — well within the size limit but
+    // won't complete the announced content-length.
+    stream.write_all(b"{").await.unwrap();
+    stream.flush().await.unwrap();
+
+    // Read whatever the server sends back within 5 seconds. Wall
+    // clock cap ensures the test fails visibly if the deadline
+    // doesn't fire.
+    let mut response = Vec::new();
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut response),
+    )
+    .await;
+
+    assert!(
+        read.is_ok(),
+        "N3 fail: server never responded within 5s — deadline did not fire"
+    );
+    let response_str = String::from_utf8_lossy(&response);
+    // Server should either explicitly emit 408 or close the
+    // connection under the layer's 504. Either is acceptable
+    // evidence that the slow-drip DoS was mitigated; the
+    // structured-JSON 408 is what the fix actually promises.
+    assert!(
+        response_str.starts_with("HTTP/1.1 408") || response_str.starts_with("HTTP/1.1 504"),
+        "N3 fail: expected 408 or 504, got:\n{response_str}"
+    );
+    if response_str.starts_with("HTTP/1.1 408") {
+        assert!(
+            response_str.contains("RequestReadTimeout"),
+            "expected structured error code in 408 body:\n{response_str}"
+        );
+    }
+}
+
+// ---------- N1 composite XSS regression pins ----------
+//
+// h2ck.me v1 BREAK-TESTS/RUNTIME-FINDINGS.md §N1 upgraded the
+// audit's M1 (docs-only for triple-brace XSS) with a runtime backstop
+// requirement: even when a caller explicitly sends
+// `Accept: text/html`, a template using `{{{X}}}` (non-json triple-
+// brace, un-escaped output) must NOT be served as `text/html` —
+// otherwise the composite of a bad template + attacker Accept header
+// is a stored-XSS lane. The renderer flags the template; the router
+// forces `text/plain` on the fallback path regardless of Accept.
+
+#[tokio::test]
+async fn n1_triple_brace_template_forces_text_plain_even_with_html_accept() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "attack", "xss", "{{{name}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/attack/xss"))
+        .header("content-type", "application/json")
+        .header("accept", "text/html")
+        .body(json!({"name": "<script>alert(1)</script>"}).to_string())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("text/plain"),
+        "N1 fail: expected text/plain, got Content-Type: {ct}"
+    );
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("<script>"),
+        "expected raw payload in body, got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn n1_json_helper_template_stays_json_response() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "safe", "obj", "{{{json body}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/safe/obj"))
+        .header("content-type", "application/json")
+        .header("accept", "text/html")
+        .body(json!({"body": {"k": "v"}}).to_string())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("application/json"),
+        "expected application/json for valid-JSON render output, got: {ct}"
+    );
+}
+
+#[tokio::test]
+async fn n1_double_brace_template_still_gets_text_html_on_explicit_accept() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "safe", "greet", "<h1>Hello {{name}}</h1>");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/safe/greet"))
+        .header("content-type", "application/json")
+        .header("accept", "text/html")
+        .body(json!({"name": "<script>alert(1)</script>"}).to_string())
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("text/html"),
+        "expected text/html for double-brace template with explicit Accept, got: {ct}"
+    );
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("&lt;script&gt;"),
+        "handlebars must HTML-escape: {body}"
+    );
+    assert!(
+        !body.contains("<script>"),
+        "unescaped script tag leaked: {body}"
+    );
 }
