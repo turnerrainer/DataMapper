@@ -16,7 +16,13 @@ RUN cargo build --release --bin datamapper
 FROM debian:13.6-slim
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `apt-get upgrade -y` pulls in the Debian security-repo fixes
+# published after the base-image tag was cut. Without this line,
+# the runtime layer inherits whatever CVE-vulnerable stdlib
+# packages (perl-base, gzip, libpcre2, libsqlite3, ...) shipped
+# in the base and the Trivy scan gate fails the publish workflow
+# with HIGH/CRITICAL findings against un-fixed OS packages.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates curl tini \
     && rm -rf /var/lib/apt/lists/*
 

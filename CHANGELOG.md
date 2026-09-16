@@ -147,6 +147,13 @@ regression-test locations live in
   encryption level boundaries). No runtime effect on the
   DataMapper binary — `reqwest` is a `[dev-dependencies]` entry
   used by the integration-test harness only.
+- **Dockerfile CVE sweep**: the runtime layer now runs
+  `apt-get upgrade -y` before installing packages, pulling
+  Debian security-repo fixes for `perl-base` (CVE-2026-13221
+  CRITICAL + 8 HIGHs), `gzip` (CVE-2026-41992 HIGH),
+  `libpcre2-8-0` (CVE-2026-86145 + CVE-2026-89161 HIGH), and
+  `libsqlite3-0` (CVE-2026-11822 + CVE-2026-11824 HIGH).
+  Required to pass the Trivy scan gate in the publish workflow.
 
 ### Test coverage
 
