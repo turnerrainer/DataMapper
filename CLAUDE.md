@@ -5,18 +5,25 @@ DataMapper's public-facing docs describe what the product does, and
 this file describes what a code-writing agent needs to know to not
 break it.
 
-**Current release** on `dev`: `v0.1.3-alpha` (last shipped).
-
-**Pending on `dev`**: a large security + FLEET-STRONGHOLDS rollup
-merged from `feat/security-and-fleet-rollup-v1` — closes every
-h2ck.me v1 audit + break-test finding surfaced after `v0.1.3-alpha`
-(N1, N2, N3, N5, N6, N7, N8, F-DM-1, FN-LOG-1..4) and adopts five
+**Current release** on `dev`: `v0.2.0-alpha` (release-prep in
+progress; PR open against `dev`). Ships the h2ck.me v1
+audit-plus-break-test findings surfaced after `v0.1.3-alpha`
+(N1, N2, N3, N5, N6, N7, N8, F-DM-1, FN-LOG-1..4) and five
 `FLEET-STRONGHOLDS.md` patterns (§1.6 W3C traceparent
 propagation, §5.1 default security response headers, §8.2 doctor
 CLI subcommand, §11.2 env-safety posture gate, §11.3 dev-fixture
-DSL gate). **Version has NOT been bumped** — the maintainer owns
-the release cut. See "Rollup deltas" below for the wire-visible
-changes to review before the next release.
+DSL gate).
+
+**Previous release**: `v0.1.3-alpha` (2026-09-06).
+
+**Semver bump rationale**: the release contains multiple
+client-observable wire-shape changes (new status codes 408 / 413
+/ 431, unified 404 JSON shape, five new default response headers,
+`traceparent` + `x-trace-id` on every response, CLI grew
+subcommands). Under 0.x semver, minor is de-facto major, so the
+0.1.3 → 0.2.0 bump signals "review your caller before upgrade."
+See "Upgrading from v0.1.3-alpha to v0.2.0-alpha" below for
+step-by-step client-side and operator-side migration.
 
 **Trunk**: `dev`. There is no `main` branch on origin; releases
 tag off `dev` after review. **Never push `main` and never bump
@@ -156,12 +163,12 @@ rollup (see below) this UPGRADES to refuse-to-start when
 
 ---
 
-## Rollup deltas (pending — not yet in a tagged release)
+## v0.2.0-alpha deltas (shipped in the rollup merge)
 
-The `feat/security-and-fleet-rollup-v1` merge into `dev` adds
-these wire-visible / operator-visible changes on top of the
-v0.1.3-alpha behaviours above. Each has regression tests; count
-went 66 → 155.
+The `feat/security-and-fleet-rollup-v1` merge into `dev` (merged
+PR #18) added these wire-visible / operator-visible changes on
+top of the v0.1.3-alpha behaviours above. Each has regression
+tests; count went 66 → 155.
 
 ### R.1 — Access log middleware + plain-text log stream (FN-LOG-1/2/3)
 
@@ -318,6 +325,355 @@ $ datamapper                   # implicit serve
 
 - **New dep**: `clap = "4"` with `derive` feature.
 - **Code**: `src/doctor.rs` + `main.rs` (clap wiring).
+
+---
+
+## Upgrading from v0.1.3-alpha to v0.2.0-alpha
+
+This section is written for an LLM (or code-writing agent) that
+has been asked to migrate a caller / operator config / adjacent
+service across the version boundary. Every subsection is
+prescriptive: what to look for, what to change, and how to
+verify the change stuck. Human summary lives in
+[`CHANGELOG.md`](./CHANGELOG.md) `## [0.2.0-alpha]`.
+
+### Client-side (HTTP callers of DataMapper)
+
+Grep the caller for these patterns, apply the fix, add a test.
+
+#### C1. Callers that parse response headers
+
+**Look for**: any code that iterates response headers, hashes
+them for a signature, snapshots them into a test fixture, or
+asserts on the exact header count.
+
+**Change**: response now carries **7 extra headers** on every
+response (5 security + `traceparent` + `x-trace-id`).
+Insert-if-absent semantics mean any handler-set value survives.
+
+**How to apply**: if the caller has a `snapshot(response)` or
+`assert response.headers.keys() == {…}`-style test, extend the
+expected set with:
+
+- `content-security-policy`
+- `strict-transport-security`
+- `x-frame-options`
+- `x-content-type-options`
+- `referrer-policy`
+- `traceparent`
+- `x-trace-id`
+
+Prefer `header in response.headers` (subset assertion) over
+`response.headers == {…}` (equality) so future header additions
+don't cascade.
+
+**Verify**: caller test suite green against a live
+`v0.2.0-alpha` instance.
+
+#### C2. Callers that parse 404 response bodies
+
+**Look for**: `if response.status == 404: return response.text
+== ""`-style checks, or hard-coded empty-body expectations for
+"route did not match" 404s.
+
+**Change**: DataMapper's global fallback (`not_found_fallback`)
+now returns the same structured JSON as `TemplateNotFound`:
+
+```json
+{"error": "NotFound", "message": "not found: ...", "tried": []}
+```
+
+**How to apply**:
+
+```diff
+- if response.status_code == 404 and not response.text:
++ if response.status_code == 404:
++     body = response.json()
++     assert body.get("error") in ("NotFound", "TemplateNotFound")
+```
+
+Every DataMapper 404 is now JSON with an `error` field. Branch on
+the `error` value if the caller needs to distinguish
+route-not-registered (`NotFound`) from template-not-on-disk
+(`TemplateNotFound`).
+
+**Verify**: caller test that hits a non-registered path (e.g.
+`POST /notaproject/notaview` where `notaproject/` doesn't exist)
+asserts the JSON shape.
+
+#### C3. Callers that expect `Accept: text/html` fallback with `Accept: */*`
+
+**Already handled in v0.1.3-alpha (M2)**. Nothing to do here in
+v0.2.0. If the caller sends `Accept: */*` and expects HTML, it
+already broke in v0.1.3.
+
+#### C4. Callers that use `Accept: text/html;q=0` intending to exclude HTML
+
+**Look for**: `Accept: text/html;q=0, application/json` or
+similar q=0 constructs.
+
+**Change**: v0.1.3 ignored `;q=` values, so `text/html;q=0`
+falsely enabled HTML fallback. v0.2.0 respects q=0 → correctly
+excludes HTML.
+
+**How to apply**: no client change needed — the caller now works
+as originally intended. If a caller was relying on the bug (using
+`text/html;q=0` to get HTML), fix the header to `Accept:
+text/html` (no q-value).
+
+#### C5. Callers of templates that use `{{{userInput}}}` (un-escaped)
+
+**Look for**: template files under `DSL/**/*.hbs` containing
+`{{{X}}}` where `X` is anything OTHER than `json`, `json_pretty`,
+or a helper the operator has proven is HTML-safe.
+
+**Change**: v0.2.0 forces `Content-Type: text/plain` for any
+response rendered from such a template, even if the caller sends
+`Accept: text/html`. Callers rendering these templates into a
+browser context no longer trigger HTML parsing.
+
+**How to apply**:
+
+1. Grep DSL for the pattern: `grep -rn '{{{[^j]' DSL/`
+   (rough filter — `{{{j` catches `{{{json …}}}`).
+2. For each hit, decide: escape to `{{X}}` (double-brace,
+   HTML-safe) or explicitly serve as HTML via reverse proxy
+   `Content-Type` override.
+3. If the template genuinely emits HTML, force the content type
+   at the reverse proxy — the DataMapper safety fallback stays
+   `text/plain`.
+
+**Verify**: boot log emits one WARN per offending template.
+
+#### C6. Callers that stream / slow-drip request bodies
+
+**Look for**: callers that upload > `limits.request_timeout_secs`
+worth of body over a slow connection.
+
+**Change**: slow uploads now return **408 `RequestReadTimeout`**
+(was: eventually 504). Body: `{"error": "RequestReadTimeout",
+"deadline_secs": <n>}`.
+
+**How to apply**: if the caller retries on 5xx, extend the retry
+policy to include 408 (or fix the upload cadence).
+
+#### C7. Callers that send oversize headers
+
+**Look for**: any single request header > 8 KiB (JWTs, session
+cookies, custom headers).
+
+**Change**: 8 KiB cap; over-cap returns **431
+`HeaderValueTooLarge`** with `{actual, limit}`. Header name is
+NOT echoed.
+
+**How to apply**: shrink the header, or if legitimate, raise the
+cap at the reverse proxy AND update the DataMapper source
+(`MAX_HEADER_VALUE_BYTES` in `src/router.rs`) if the operator
+runs a custom build. There is no config knob for this in
+v0.2.0 (defence is deliberately hard-coded).
+
+#### C8. Callers that post giant JSON arrays
+
+**Look for**: request bodies containing arrays with more than
+10 000 elements at any nesting depth.
+
+**Change**: over-cap returns **413 `RequestArrayTooLarge`** with
+`{length, limit}`.
+
+**How to apply**: chunk the request, or raise
+`limits.max_body_array_length` in `datamapper.yaml`. Set to `0`
+to disable entirely.
+
+### Operator-side (deployment / infra changes)
+
+#### O1. Env-safety refusal to boot
+
+**Look for**: a production / staging / test deployment where
+`APP_ENV` (or `ENVIRONMENT` / `DEPLOY_ENV`) is anything other
+than `dev`.
+
+**Change**: v0.2.0 REFUSES to boot in non-dev when the DSL root
+is writable OR any `.hbs` under `dsl_path` matches a
+dev-fixture pattern.
+
+**How to apply**:
+
+1. Verify DSL mount is `:ro` in `docker-compose.yml`:
+   ```yaml
+   - ./DSL:/app/DSL:ro
+   ```
+2. Grep the DSL tree for dev-fixture patterns:
+   ```bash
+   find DSL -name '*.hbs' | grep -E \
+     'dev-login|mock-|-mock|/test/|example-|-example|/dev/|/mocks/'
+   ```
+3. Either remove the matching files from the production build OR
+   set `APP_ENV=dev` (only appropriate for local dev).
+4. Run `datamapper doctor --strict` to verify the boot posture
+   before rolling out.
+
+**Boot error text** (grep-target for log aggregators):
+
+```
+REFUSING TO START in Production: N unsafe posture item(s):
+  - dsl.root_writable: DSL root is writable ...
+```
+
+#### O2. CLI positional arguments
+
+**Look for**: systemd unit files, docker CMD, kubernetes
+`command:` / `args:` that pass positional arguments to
+`datamapper`.
+
+**Change**: v0.2.0 uses clap subcommands. Bare `datamapper`
+still works (defaults to `serve`), but positional args other
+than `serve` / `doctor` break.
+
+**How to apply**:
+
+```diff
+- ExecStart=/usr/local/bin/datamapper /etc/datamapper.yaml
++ ExecStart=/usr/local/bin/datamapper --config /etc/datamapper.yaml serve
+```
+
+Or the equivalent CMD in Dockerfile:
+
+```dockerfile
+- CMD ["datamapper"]
++ CMD ["datamapper", "serve"]
+```
+
+The `--config <path>` flag is a global argument, applied before
+the subcommand.
+
+#### O3. Pre-boot validation via `datamapper doctor`
+
+**New capability**: before rolling out a config change to
+production, run `datamapper doctor --strict` in the target
+environment (same env vars, same yaml, same DSL tree). Exit 0
+means clean; exit 1 means fix something before start.
+
+**How to apply**: add a `preStart` / `initContainer` /
+`OnFailure` hook that runs `datamapper doctor --strict` and
+gates rollout on exit 0.
+
+Example (kubernetes initContainer):
+
+```yaml
+initContainers:
+  - name: datamapper-doctor
+    image: turnerrainer/datamapper:v0.2.0-alpha
+    command: ["datamapper", "--config", "/etc/datamapper.yaml", "doctor", "--strict"]
+    volumeMounts: [...]
+```
+
+#### O4. `limits.request_timeout_secs` now bounds two things
+
+**Look for**: `datamapper.yaml` with `limits.request_timeout_secs`
+set to a custom value.
+
+**Change**: the value is now applied to BOTH the whole-request
+timeout (via `TimeoutLayer`) AND the body-read deadline (new in
+v0.2.0). Previously the body read was implicitly bounded by the
+30 s hard-code inside `TimeoutLayer` only.
+
+**How to apply**: if operator set `request_timeout_secs` low to
+speed up slow-body rejection, verify the setting is compatible
+with legitimate slow-but-large-body clients. Slow-body now
+gets its own dedicated 408 error code — the timeout is more
+observable, not looser.
+
+#### O5. Log format changes (SIEM parsers)
+
+**Look for**: SIEM / log-aggregation pipelines that regex the
+DataMapper stderr for tracing output.
+
+**Change**: `tracing_subscriber` now emits **plain text (no ANSI
+escapes)** when stderr is not a TTY. Regexes that stripped ANSI
+in preprocessing are now no-ops (safe) — regexes that DEPENDED
+on the ANSI codes as delimiters (unusual) break.
+
+**Detect**: `docker logs <container> | LC_ALL=C tr -cd $'\x1b'
+| wc -c` returns 0 in v0.2.0.
+
+Also new: a per-request `http_request_completed` INFO line with
+method / route (matched pattern only, NOT raw URI) / status /
+duration_us / trace_id. Add a SIEM rule if the operator wants
+per-request telemetry into their aggregation pipeline.
+
+### LLM-side (when editing this codebase)
+
+#### L1. Where the R-series code lives
+
+| R# | Module | Key symbols |
+|---|---|---|
+| R.1 | `src/access_log.rs` | `access_log_middleware` |
+| R.2 | `src/security_headers.rs` | `security_headers`, `HEADERS` const |
+| R.3 | `src/traceparent.rs` | `traceparent`, `parse_inbound_traceparent` |
+| R.4 | `src/router.rs` | `accept_qvalue`, `MatchSpecificity` |
+| R.5 | `src/renderer.rs` | `contains_unsafe_raw_output`, `RenderOutcome.has_unsafe_raw_output` |
+| R.6 | `src/router.rs` | `invoke` (Request extractor), `AppState.request_timeout_secs` |
+| R.7 | `src/router.rs` | `find_oversize_array`, `AppState.max_body_array_length` |
+| R.8 | `src/router.rs` | `header_value_size_gate`, `MAX_HEADER_VALUE_BYTES` |
+| R.9 | `src/error.rs` | `clip_tried_paths`, `not_found_fallback`, `MAX_TRIED_PATH_CHARS` |
+| R.10 | `src/config.rs` | `redact_serde_error` |
+| R.11 | `src/env_safety.rs` | `Environment`, `PostureCheck`, `DevFixtureAction` |
+| R.12 | `src/doctor.rs` + `src/main.rs` | `doctor::run`, clap `Cli` / `Command` |
+
+Middleware order in `router.rs::build()` — OUTER-first is
+LAST-in-chain: `header_value_size_gate` → `access_log_middleware`
+→ `security_headers` → `traceparent`. Reordering breaks the
+header-cap-runs-before-anything-else guarantee (N8) and the
+trace-id-in-access-log invariant (FN-LOG-4).
+
+#### L2. Adding a new error variant
+
+Follow the pattern for `HeaderValueTooLarge` / `RequestArrayTooLarge` /
+`RequestReadTimeout` in `src/error.rs`:
+
+1. Add variant to `DataMapperError` enum with `#[error]` message.
+2. Add to `status()` returning the HTTP status code.
+3. Add to `code()` returning the stable `error` string.
+4. In `into_response()`, insert a `if let DataMapperError::X { .. } = &self` block that adds finding-specific fields to the JSON body (`limit`, `actual`, `length`, `deadline_secs`, …).
+5. Add a row to `book/src/failure-modes.md` "Error codes" table.
+6. Add "Extra fields present" entry under the response-body-shape §.
+7. Write a regression test in `tests/it_end_to_end.rs` asserting status + error code + extra fields.
+
+#### L3. Adding a new middleware
+
+Wire it in `router.rs::build()` at the correct chain position
+(see L1). If it sets response headers, use `insert_if_absent`
+semantics (see `security_headers.rs`) so handler-set values
+survive. If it must run BEFORE the handler can panic, wire
+before `Router` — otherwise as a `.layer(from_fn(…))`.
+
+#### L4. Bumping a limit / adding a config field
+
+1. Add field to `Limits` struct in `src/config.rs` with a
+   `serde(default = "…")` fallback.
+2. Add corresponding field on `AppState` in `src/router.rs`.
+3. Wire `AppState { …, new_field: cfg.limits.new_field }` in
+   `src/main.rs::serve()`.
+4. Add a row to `book/src/configuration.md` §3 field reference.
+5. **Every test fixture that constructs `AppState` needs the
+   new field** — grep `AppState {` in `tests/` and add the
+   field to each site. Missing one = compile break, so this
+   is caught early, but painful — do them all in one pass.
+
+#### L5. When you break the wire shape (do it deliberately)
+
+Any new client-observable change (new response header, new
+status code, new error field, changed content-type semantics)
+must:
+
+- Add a `CHANGELOG.md` entry under `## [Unreleased]` in a
+  `### Breaking` block.
+- Add a regression test that would fail against the old shape.
+- Update `book/src/failure-modes.md` if error-path.
+- Update `book/src/configuration.md` if config-path.
+- Update this CLAUDE.md "Upgrading from" section with detection +
+  fix guidance.
+- Bump the SemVer minor (0.x means minor = breaking).
 
 ---
 

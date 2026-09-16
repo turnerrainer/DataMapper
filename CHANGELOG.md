@@ -7,6 +7,173 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha] - 2026-09-16
+
+Security-hardening + observability release. Closes every h2ck.me
+v1 audit-plus-break-test finding surfaced after `v0.1.3-alpha`
+(N1, N2, N3, N5, N6, N7, N8, F-DM-1, FN-LOG-1..4) and adopts five
+`FLEET-STRONGHOLDS.md` patterns (§1.6 W3C traceparent, §5.1
+security response headers, §8.2 doctor CLI, §11.2 env-safety
+posture gate, §11.3 dev-fixture DSL gate). One reflected-XSS
+lane closed (N1 composite triple-brace + Accept: text/html),
+plus four DoS-mitigation caps.
+
+Delivered as a single rollup — see merged PR #18.
+
+### Breaking
+
+Every item below is client- or operator-observable. Details and
+regression-test locations live in
+[`CLAUDE.md`](https://github.com/turnerrainer/datamapper/blob/dev/CLAUDE.md#v020-alpha-deltas-shipped-in-the-rollup-merge)
+"v0.2.0-alpha deltas" and the
+[Failure modes](../failure-modes.md) reference.
+
+- **New response status codes on the error path** —
+  `408 RequestReadTimeout` (slow-body/slow-loris, was silently
+  folded into 504), `413 RequestArrayTooLarge` (request-body
+  array over `limits.max_body_array_length`), `431
+  HeaderValueTooLarge` (single request header > 8 KiB). Structured
+  JSON bodies with `error`/`message` and finding-specific fields
+  (`deadline_secs`, `length`+`limit`, `actual`+`limit`).
+- **Global 404 shape changed** — path-encoded-traversal requests
+  that used to hit Axum's empty-body default 404 now return the
+  same `{"error":"NotFound","message":"...","tried":[]}` JSON as
+  `TemplateNotFound`. Callers parsing the old empty body break.
+- **`TemplateNotFound.tried` entries clipped at 256 chars each** —
+  killed a 4× URL-length amplification vector. Callers displaying
+  the paths verbatim see truncated strings on ultra-long routes.
+- **Triple-brace templates (`{{{X}}}`) force `text/plain`** even
+  when the client sends `Accept: text/html` — closes the composite
+  XSS lane (attacker `Accept` + author's un-escaped output). The
+  `{{{json obj}}}` helper is unaffected — its output is valid
+  JSON and continues to serve as `application/json`.
+- **`Accept:` header parsed per RFC 7231** — `;q=` quality values
+  are honoured. `Accept: text/html;q=0` correctly excludes HTML;
+  `Accept: application/json;q=0, text/html` correctly selects
+  HTML. RFC-compliant callers already work; buggy `q=0` callers
+  now go the right way.
+- **Five default security response headers on every response** —
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`,
+  `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`,
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`. Insert-if-absent semantics
+  preserve any handler-set value. Callers that were parsing the
+  bare 200-OK header set gain five new keys.
+- **W3C `traceparent` + `x-trace-id` on every response** — inbound
+  `traceparent` inherited when well-formed (version=00, 32-hex
+  trace-id ≠ all-zeros); fresh `uuid::v4` otherwise. Span id is
+  always regenerated (this service's span, not the caller's).
+- **Env-safety refusal-to-boot in non-dev** — with `APP_ENV`
+  (or `ENVIRONMENT` / `DEPLOY_ENV`) set to anything other than
+  `dev` (unknown values fail-safe to `Production`), boot aborts
+  when the DSL root is writable OR any `.hbs` under `dsl_path`
+  matches a dev-fixture pattern (`dev-login`, `mock-`, `-mock`,
+  `/test/`, `example-`, `-example`, `/dev/`, `/mocks/`). Fix the
+  posture or set `APP_ENV=dev` for local runs.
+- **CLI surface grew subcommands** — `datamapper serve` (default,
+  bare invocation still resolves) and `datamapper doctor
+  [--strict]`. `--config <path>` moves to the global argument
+  slot. Scripts that pass positional args other than a subcommand
+  break; scripts calling `datamapper` bare still work.
+- **`limits.request_timeout_secs` is now wired end-to-end** — was
+  advisory-only on the `TimeoutLayer` at a hard-coded 30 s. The
+  same value now also bounds body read (see the new 408). Custom
+  values in `datamapper.yaml` take effect on both caps.
+
+### Security
+
+- **N1 composite XSS** — reflected-XSS lane closes for templates
+  that use `{{{userInput}}}` and callers that send `Accept:
+  text/html`. Boot WARN per offending template.
+- **N2 M2 bypass** — `Accept: */*` still does NOT enable HTML
+  fallback (unchanged from M2). `q=0` exclusion is now honoured.
+- **N3 slow-loris** — body read deadline separates slow-body
+  (408) from render/response-write timeout (504). Prevents
+  request-slot starvation via slow-drip uploads.
+- **N5 URL-length amplification** — `tried:` paths clipped at
+  256 chars each.
+- **N6 404 shape unification** — path-encoded-traversal cannot
+  differentiate route-not-registered from template-not-found via
+  response-shape probe.
+- **N7 config parse error redaction** — misconfigured `--config`
+  pointing at a mounted secret file no longer leaks contents to
+  log aggregators. Location (line, column) preserved; value
+  elided.
+- **N8 header amplification** — application-layer per-header
+  value cap at 8 KiB (matches nginx / Cloudflare defaults; covers
+  legit JWTs / session cookies / W3C traceparent).
+- **F-DM-1 render amplification** — request-body array length
+  bounded before render (default 10 000); `{{#each}}` DoS caps
+  at cost. `CappedWriter` (from M3) enforces the response cap
+  mid-render.
+- **FLEET §11.2** — writable DSL root upgrades from WARN
+  (v0.1.3-alpha) to REFUSE-TO-BOOT in non-dev.
+- **FLEET §11.3** — dev-fixture DSL refusal in non-dev.
+
+### Added
+
+- `datamapper doctor [--strict]` subcommand — pre-boot validator
+  with no side effects. Grep-friendly `[ok]/[warn]/[error]`
+  output. Exit 0 on clean, 1 on error (or on warn with
+  `--strict`). See `book/src/configuration.md` §2.1.
+- `limits.max_body_array_length` config field (default `10000`,
+  `0` disables). See `book/src/configuration.md` §3.
+- `access_log` middleware — one INFO line per request:
+  `http_request_completed method=X route=Y status=Z
+  duration_us=... trace_id=...`. Matched route pattern only; no
+  headers, bodies, client IPs, or raw URIs.
+- `security_headers`, `traceparent`, `env_safety`, `access_log`,
+  `doctor` modules in `src/`.
+
+### Changed
+
+- Tracing subscriber emits plain-text (no ANSI escapes) when
+  stderr is not a TTY — `docker logs` / `journalctl` capture
+  SIEM-clean bytes (FN-LOG-1/2).
+- Config parse errors go through `redact_serde_error` — invalid
+  YAML values elided, location preserved.
+- Router extracts `Request` (not `Bytes`) so the body read is
+  wrapped in an explicit `tokio::time::timeout`.
+
+### Dependencies
+
+- **New**: `uuid = "1"` (default-features off, `v4` only) — for
+  W3C `traceparent` trace-id generation.
+- **New**: `clap = "4"` (`derive` feature) — for the
+  `datamapper doctor` subcommand.
+- **Bumped**: `rustls 0.23.43 → 0.23.45` (transitive via
+  dev-only `reqwest`) — clears **RUSTSEC-2026-0285** (medium,
+  5.3: TLS 1.3 handshake messages incorrectly accepted across
+  encryption level boundaries). No runtime effect on the
+  DataMapper binary — `reqwest` is a `[dev-dependencies]` entry
+  used by the integration-test harness only.
+
+### Test coverage
+
+- **155 tests** total, up from 66 on `v0.1.3-alpha` (+89 new).
+  96 lib unit + 40 end-to-end + 17 regression-refacto + 1 JS
+  compat corpus + 1 cross-impl repro.
+- `cargo audit --deny warnings`, `cargo deny check`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo fmt
+  --check`, and `mdbook build` (with linkcheck) all clean.
+
+### Upgrade notes
+
+Detailed upgrade guidance for an operator moving from
+`v0.1.3-alpha` lives in
+[`CLAUDE.md` §"Upgrading from v0.1.3-alpha"](https://github.com/turnerrainer/datamapper/blob/dev/CLAUDE.md#upgrading-from-v013-alpha-to-v020-alpha).
+Short version:
+
+- If your reverse proxy overrides any of the 5 security headers,
+  nothing changes — the middleware is insert-if-absent.
+- If your CI parses the bare 404 response body, update the
+  parser to accept the structured JSON shape (same shape as
+  `TemplateNotFound`).
+- If your deployment runs bare `datamapper` with positional args,
+  switch to `datamapper serve` explicitly.
+- If your deployment runs a writable DSL mount in production,
+  either fix the mount (`:ro`) or set `APP_ENV=dev`.
+
 ## [0.1.3-alpha] - 2026-09-06
 
 Security-hardening release addressing the h2ck.me v1 pre-publication
@@ -163,7 +330,8 @@ port zero-touch. Full porting summary in
   004 (JSON-schema validation), 005 (helper expansion) filed.
 - 24 unit + 16 integration tests, all green.
 
-[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.1.3-alpha...HEAD
+[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.2.0-alpha...HEAD
+[0.2.0-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.2.0-alpha
 [0.1.3-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.3-alpha
 [0.1.0-alpha.2]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.1
