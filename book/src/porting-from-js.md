@@ -23,6 +23,16 @@ migrated with only the changes on this page.
       switch to `application/json`.
 - [ ] If any monitor asserts strict-equality on error JSON
       bodies, allow the extra `message` field.
+- [ ] **v0.2.0-alpha:** if any monitor snapshots response headers
+      exactly, extend the expected set with 5 security headers +
+      `traceparent` + `x-trace-id` (see §8).
+- [ ] **v0.2.0-alpha:** if the container CMD passes a positional
+      config-path argument, switch to
+      `datamapper --config <path> serve` (or run
+      `datamapper doctor --strict` as an initContainer).
+- [ ] **v0.2.0-alpha:** if you were running with a writable DSL
+      mount, either fix to `:ro` or set `APP_ENV=dev` — non-dev
+      environments refuse to boot with a writable DSL root.
 
 ---
 
@@ -194,6 +204,14 @@ New error codes (each replaces a JS unstructured response):
 - `ResponseTooLarge` (500) — no JS equivalent (new cap)
 - `Internal` (500) — no JS equivalent
 - `UnsupportedContentType` (415) — was silently accepted as form data on JS
+- `NotFound` (404) — global fallback for path-encoded-traversal
+  requests; same JSON shape as `TemplateNotFound` (**v0.2.0-alpha**)
+- `RequestReadTimeout` (408) — slow-drip / slow-loris upload
+  (**v0.2.0-alpha**; was silently folded into 504)
+- `RequestArrayTooLarge` (413) — request-body array exceeded
+  `limits.max_body_array_length` (**v0.2.0-alpha**)
+- `HeaderValueTooLarge` (431) — single request header value > 8 KiB
+  (**v0.2.0-alpha**)
 
 Full list: [Failure modes](./failure-modes.md).
 
@@ -229,8 +247,8 @@ JS `console.log` output. See
 
 The Rust image is at:
 
-- `docker.io/turnerrainer/datamapper:0.1.0-alpha.2`
-- `ghcr.io/turnerrainer/datamapper:0.1.0-alpha.2`
+- `docker.io/turnerrainer/datamapper:0.2.0-alpha`
+- `ghcr.io/turnerrainer/datamapper:0.2.0-alpha`
 - `docker.io/turnerrainer/datamapper:alpha` (floating pre-release)
 - `ghcr.io/turnerrainer/datamapper:alpha`
 
@@ -306,6 +324,95 @@ Deliberate list, so you don't need to re-verify these:
 - Cross-check against
   [Failure modes](./failure-modes.md) — every HTTP status the
   Rust binary can emit is enumerated.
+- Run `datamapper doctor --strict` (v0.2.0-alpha+) with the same
+  config to reproduce the pre-boot diagnostic without side effects.
 - File an issue at
   [github.com/turnerrainer/datamapper](https://github.com/turnerrainer/datamapper/issues)
   with the boot log + the request/response pair.
+
+---
+
+## §8 v0.2.0-alpha deltas (since v0.1.3-alpha) for JS porters
+
+If you last synced with the Rust implementation at `v0.1.3-alpha`
+or earlier, `v0.2.0-alpha` adds these on the wire and at boot.
+Full LLM-implementable migration guide lives in
+[`CLAUDE.md` §"Upgrading from v0.1.3-alpha to v0.2.0-alpha"](https://github.com/turnerrainer/datamapper/blob/dev/CLAUDE.md#upgrading-from-v013-alpha-to-v020-alpha).
+
+### §8.1 Response headers grew (every response, always)
+
+Five security headers:
+
+- `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`
+- `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
+- `X-Frame-Options: DENY`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: no-referrer`
+
+Two observability headers:
+
+- `traceparent: 00-<32-hex trace>-<16-hex span>-01` (W3C
+  Trace Context; inherited from inbound if well-formed, fresh
+  UUID v4 otherwise)
+- `x-trace-id: <32-hex trace>`
+
+**Migration:** if a reverse proxy already sets any of these, the
+DataMapper middleware is insert-if-absent — proxy value wins. If
+a caller snapshots response headers for equality assertions,
+extend the expected set.
+
+### §8.2 New error responses on the failure path
+
+| Status | `error` code | New in v0.2.0? |
+|---|---|---|
+| 404 | `NotFound` | yes — was Axum empty-body default |
+| 408 | `RequestReadTimeout` | yes — was silently folded into 504 |
+| 413 | `RequestArrayTooLarge` | yes — no JS equivalent |
+| 431 | `HeaderValueTooLarge` | yes — no JS equivalent |
+
+All four are structured JSON `{error, message, …}`. See
+[Failure modes](./failure-modes.md).
+
+### §8.3 CLI grew subcommands
+
+Bare `datamapper` still works (defaults to `serve`). If a
+container CMD or systemd unit passes positional args other than
+`serve` / `doctor`, break — switch to:
+
+```diff
+- CMD ["datamapper", "/etc/datamapper.yaml"]
++ CMD ["datamapper", "--config", "/etc/datamapper.yaml", "serve"]
+```
+
+New `datamapper doctor [--strict]` subcommand validates config +
+DSL without starting the server. Use as an initContainer or
+pre-boot gate.
+
+### §8.4 Env-safety refusal to boot
+
+Set `APP_ENV=dev` (or `ENVIRONMENT` / `DEPLOY_ENV`) explicitly
+for local runs; anything else fails safe to `Production`. In
+non-dev, DataMapper REFUSES to boot when:
+
+- The DSL root is writable by the process (was WARN in
+  v0.1.3-alpha; now hard fail).
+- Any `.hbs` under `dsl_path` matches a dev-fixture pattern
+  (`dev-login`, `mock-`, `-mock`, `/test/`, `example-`,
+  `-example`, `/dev/`, `/mocks/`).
+
+Boot-error prefix (grep target):
+`REFUSING TO START in Production: N unsafe posture item(s):`.
+
+### §8.5 Accept-header q-values honoured
+
+`Accept: text/html;q=0` correctly excludes HTML now (previously
+ignored). RFC-compliant callers already work; broken q=0 callers
+now go the right way.
+
+### §8.6 Triple-brace un-escaped templates force text/plain
+
+Templates using `{{{X}}}` (non-`json`, un-escaped) always serve
+`text/plain` even when the caller sends `Accept: text/html`.
+Boot WARN per offending template. Fix by escaping to `{{X}}` or
+serving via reverse-proxy `Content-Type` override. The
+`{{{json obj}}}` helper is unaffected.

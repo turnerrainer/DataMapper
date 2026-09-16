@@ -179,6 +179,15 @@ response served as `text/html`.
    for HTML — a `<script>` payload delivered as `text/plain` is
    inert in a browser (see the M2 defence in
    [Failure modes](./failure-modes.md)).
+4. **As of `v0.2.0-alpha`, any template containing `{{{X}}}`
+   (non-`json` triple-brace) is served as `text/plain` regardless
+   of `Accept: text/html`** (the N1 composite-XSS defence).
+   DataMapper emits a boot WARN naming each offending template.
+   The `{{{json obj}}}` helper is exempt — its output is valid
+   JSON and continues to upgrade to `application/json`. If your
+   template legitimately emits HTML with un-escaped content, force
+   `Content-Type: text/html` at the reverse proxy; the
+   application-layer fallback stays `text/plain`.
 
 **Bad — attacker-controlled markup, HTML response:**
 

@@ -166,7 +166,7 @@ to change anything.
 ### 3.1 Structured tracing (via `tracing-subscriber`)
 
 ```text
-2026-08-05T12:00:00.000Z  INFO datamapper: datamapper v0.1.0-alpha.2 starting
+2026-08-05T12:00:00.000Z  INFO datamapper: datamapper v0.2.0-alpha starting
 2026-08-05T12:00:00.001Z  INFO datamapper: loaded config from ./datamapper.yaml
 2026-08-05T12:00:00.001Z  INFO datamapper: dsl_path=./DSL port=3000 max_request_bytes=2097152 max_response_bytes=16777216
 2026-08-05T12:00:00.002Z  INFO datamapper: listening on 0.0.0.0:3000
@@ -254,7 +254,8 @@ count as an HTML opt-in — the fallback for those clients is
 `text/plain`, so an operator error page containing attacker-influenced
 input cannot be rendered as HTML by a wildcard-Accept client.
 
-Post-v0.1.3-alpha, two further tightenings apply:
+As of `v0.2.0-alpha`, two further tightenings apply on top of
+the M2 explicit-opt-in rule:
 
 - The `Accept:` parser now honours RFC 7231 `;q=<value>` quality
   weights. `Accept: text/html;q=0` (explicit exclusion) no longer

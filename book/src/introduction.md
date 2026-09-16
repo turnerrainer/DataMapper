@@ -5,7 +5,7 @@ REST API. Drop a file at `DSL/samples/ping.hbs` → it answers
 `POST /samples/ping`. Send a JSON body → get the rendered output
 back as JSON (or HTML, if that's what the template produces).
 
-**Version:** 0.1.0-alpha.2 · **License:** Apache-2.0
+**Version:** 0.2.0-alpha · **License:** Apache-2.0
 · **Source:** [github.com/turnerrainer/datamapper](https://github.com/turnerrainer/datamapper)
 
 ## What DataMapper is for
