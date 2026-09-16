@@ -24,9 +24,9 @@ Delivered as a single rollup — see merged PR #18.
 
 Every item below is client- or operator-observable. Details and
 regression-test locations live in
-[`CLAUDE.md`](./CLAUDE.md#rollup-deltas-pending--not-yet-in-a-tagged-release)
-"Rollup deltas" and the
-[Failure modes](./book/src/failure-modes.md) reference.
+[`CLAUDE.md`](https://github.com/turnerrainer/datamapper/blob/dev/CLAUDE.md#v020-alpha-deltas-shipped-in-the-rollup-merge)
+"v0.2.0-alpha deltas" and the
+[Failure modes](../failure-modes.md) reference.
 
 - **New response status codes on the error path** —
   `408 RequestReadTimeout` (slow-body/slow-loris, was silently
@@ -161,7 +161,7 @@ regression-test locations live in
 
 Detailed upgrade guidance for an operator moving from
 `v0.1.3-alpha` lives in
-[`CLAUDE.md` §"Upgrading from v0.1.3-alpha"](./CLAUDE.md#upgrading-from-v013-alpha-to-v020-alpha).
+[`CLAUDE.md` §"Upgrading from v0.1.3-alpha"](https://github.com/turnerrainer/datamapper/blob/dev/CLAUDE.md#upgrading-from-v013-alpha-to-v020-alpha).
 Short version:
 
 - If your reverse proxy overrides any of the 5 security headers,
@@ -330,7 +330,8 @@ port zero-touch. Full porting summary in
   004 (JSON-schema validation), 005 (helper expansion) filed.
 - 24 unit + 16 integration tests, all green.
 
-[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.1.3-alpha...HEAD
+[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.2.0-alpha...HEAD
+[0.2.0-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.2.0-alpha
 [0.1.3-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.3-alpha
 [0.1.0-alpha.2]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.1
