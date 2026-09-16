@@ -251,16 +251,31 @@ jobs:
             echo "No CHANGELOG section for $VERSION — using auto-generated notes"
           fi
 
-          FLAGS=(--title "$TAG" --verify-tag "${NOTES_ARG[@]}")
-          if [ "$PRERELEASE" = "true" ]; then
-            FLAGS+=(--prerelease)
-          else
-            FLAGS+=(--latest)
-          fi
+          # Pre-1.0 convention: every DataMapper release is
+          # currently an -alpha, and the project has no stable
+          # `v1.0.0+` line yet. Marking each new tag `--latest`
+          # (never `--prerelease`) keeps the repo homepage
+          # "Releases" sidebar populated so the current shipped
+          # version is always one click from the landing page.
+          #
+          # Container-registry tags stay semver-honest — the
+          # `Compose image tags` step above still keeps :latest
+          # and :major.minor floating tags off of any suffixed
+          # release, so a `docker pull …:latest` cannot silently
+          # pick up an alpha. The two "latest" concepts are
+          # deliberately decoupled: GitHub-Release-latest tracks
+          # visibility, container-tag-latest tracks stability.
+          #
+          # Revisit this policy when the first `v1.0.0` ships:
+          # at that point `PRERELEASE=true` should re-enable the
+          # `--prerelease` flag so alphas / betas / rcs floated
+          # between stable releases do not shadow the stable
+          # line on the homepage.
+          FLAGS=(--title "$TAG" --verify-tag --latest "${NOTES_ARG[@]}")
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — updating notes"
-            EDIT_FLAGS=(--title "$TAG")
+            echo "Release $TAG already exists — updating notes + latest flag"
+            EDIT_FLAGS=(--title "$TAG" --prerelease=false --latest)
             if [ -s "$NOTES_FILE" ]; then
               EDIT_FLAGS+=(--notes-file "$NOTES_FILE")
             fi
