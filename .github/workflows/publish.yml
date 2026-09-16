@@ -29,7 +29,11 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  # `contents: write` is required by the "Create / update GitHub
+  # Release" step to publish a release entry via `gh release
+  # create`. All other steps in this workflow only read the repo,
+  # so scope escalation stays contained.
+  contents: write
   packages: write
   id-token: write
   attestations: write
@@ -207,3 +211,63 @@ jobs:
             echo "Signing ${registry_image}@${DIGEST}"
             cosign sign --yes "${registry_image}@${DIGEST}"
           done
+
+      # Populate /releases so the GitHub Release list stays in
+      # sync with what actually shipped. Runs only after cosign
+      # completes — so no Release entry is ever created for an
+      # unsigned image. Extracts the CHANGELOG.md section for
+      # this tag as the release body; falls back to gh's
+      # auto-generated notes when the section is missing (e.g.
+      # an ad-hoc dispatch of an old tag).
+      #
+      # Prerelease convention follows `steps.meta.outputs.prerelease`:
+      # any tag with a suffix (v*.*.*-*) is a prerelease and does
+      # NOT get `--latest`. Clean stable tags become `--latest`.
+      - name: Create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          NOTES_FILE=".release-notes.tmp.md"
+          # Extract this tag's CHANGELOG section: everything
+          # between `## [$VERSION]` and the next `## [`.
+          awk -v v="$VERSION" '
+            /^## \[/ {
+              if (in_section) { exit }
+              if ($0 ~ "\\[" v "\\]") { in_section=1 }
+            }
+            in_section { print }
+          ' CHANGELOG.md > "$NOTES_FILE"
+
+          if [ -s "$NOTES_FILE" ]; then
+            NOTES_ARG=(--notes-file "$NOTES_FILE")
+            echo "Using CHANGELOG section for $VERSION as release body"
+          else
+            NOTES_ARG=(--generate-notes)
+            echo "No CHANGELOG section for $VERSION — using auto-generated notes"
+          fi
+
+          FLAGS=(--title "$TAG" --verify-tag "${NOTES_ARG[@]}")
+          if [ "$PRERELEASE" = "true" ]; then
+            FLAGS+=(--prerelease)
+          else
+            FLAGS+=(--latest)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating notes"
+            EDIT_FLAGS=(--title "$TAG")
+            if [ -s "$NOTES_FILE" ]; then
+              EDIT_FLAGS+=(--notes-file "$NOTES_FILE")
+            fi
+            gh release edit "$TAG" "${EDIT_FLAGS[@]}"
+          else
+            echo "Creating release $TAG"
+            gh release create "$TAG" "${FLAGS[@]}"
+          fi
+
+          rm -f "$NOTES_FILE"
