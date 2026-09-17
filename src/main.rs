@@ -21,6 +21,7 @@ use datamapper::{
     doctor, env_safety,
     renderer::Renderer,
     router::{self, AppState},
+    shutdown,
 };
 
 #[derive(Parser)]
@@ -180,7 +181,16 @@ async fn serve() -> anyhow::Result<()> {
     // working. See book/src/porting-from-js.md.
     println!("DataMapper listening on :{}", cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    // h2ck.me v1 NEXT-TASKS.md §T-18 — orchestrator-issued
+    // SIGTERM / SIGINT / SIGHUP triggers a graceful drain: the
+    // acceptor stops taking new connections while in-flight
+    // requests finish. Combined with the `TimeoutLayer` above,
+    // an unresponsive template can only delay shutdown by
+    // `request_timeout_secs`.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown::shutdown_signal())
+        .await?;
+    tracing::info!("shutdown complete");
     Ok(())
 }
 
