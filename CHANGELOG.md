@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Follow-up to `v0.2.0-alpha` — closes the remaining h2ck.me v1
+`NEXT-TASKS.md` backlog entries whose regression test would fire
+against the release build. All three items land as single-purpose
+changes with a regression pin apiece; no wire-shape changes to
+existing endpoints beyond the ones called out below.
+
+### Breaking
+
+- **`405 Method Not Allowed` on the render route is now
+  structured JSON** — a `GET` / `PUT` / `DELETE` against
+  `/:project/*view` used to fall through to axum's default 405
+  with a bare-text body. It now returns the standard DataMapper
+  error shape:
+  ```json
+  {"error": "MethodNotAllowed", "message": "method not allowed on this route"}
+  ```
+  plus an `Allow: POST` response header per RFC 7231 §6.5.5. The
+  same shape now also carries `Allow: GET, HEAD` on the `/healthz`
+  and `/health` aliases when hit with a non-GET / non-HEAD verb
+  (previously the JSON body was already structured; the `Allow`
+  header is new). Callers that key on `resp.text() == ""` for
+  wrong-method requests break — treat the body as JSON with an
+  `error` field. h2ck.me v1 NEXT-TASKS.md §T-13.
+
+### Added
+
+- **Graceful shutdown on `SIGTERM` / `SIGINT` / `SIGHUP`** — the
+  process now honours orchestrator stop signals through
+  `axum::serve(...).with_graceful_shutdown(...)`. New connections
+  are refused after the first signal; in-flight requests get up
+  to `request_timeout_secs` to finish before the process exits.
+  Combined with the existing `TimeoutLayer` this bounds the
+  drain window to `limits.request_timeout_secs` (30 s default).
+  On non-Unix targets only Ctrl-C is wired. h2ck.me v1
+  NEXT-TASKS.md §T-18.
+
+### Test coverage
+
+- +5 integration tests (structured 405 for GET/PUT/DELETE +
+  `Allow: POST` header assertion + graceful-shutdown future
+  pending / signalled).
+- +1 integration test pinning `T-3` defense-in-depth:
+  nested-`#each` with 10 000 × 10 000 iterations rendering into
+  a 64 KiB cap is caught by `CappedWriter` as
+  `500 ResponseTooLarge`, not a memory blow-up.
+- +1 integration test for `T-12` pathological over-limit uploads
+  (32 KiB body against a 128-byte cap) — response body is
+  structured JSON regardless of overshoot magnitude.
+
+### Not addressed in this iteration
+
+- **`T-3` full iteration-cap error code** — the `render_iteration_
+  cap_exceeded` variant would require vendoring
+  handlebars-rust's `EachHelper` internals (`BlockContext` /
+  `create_block` are `pub(crate)`) or shipping a partial
+  reimplementation that loses the `@first` / `@last` / `@index`
+  / `@key` block-local variables in-use by existing DSLs (see
+  `DSL/samples/advanced/nested_each_index.hbs`). Defence-in-depth
+  today: F-DM-1 array cap rejects pre-render, `CappedWriter`
+  aborts unbounded output mid-render, `TimeoutLayer` catches
+  pathological CPU spend on the empty-body edge case. The new
+  T-3 regression test pins the primary lane (nested-`#each`
+  with non-empty inner body → structured 500).
+
 ## [0.2.0-alpha] - 2026-09-16
 
 Security-hardening + observability release. Closes every h2ck.me

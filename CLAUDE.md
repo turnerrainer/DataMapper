@@ -5,14 +5,20 @@ DataMapper's public-facing docs describe what the product does, and
 this file describes what a code-writing agent needs to know to not
 break it.
 
-**Current release** on `dev`: `v0.2.0-alpha` (release-prep in
-progress; PR open against `dev`). Ships the h2ck.me v1
-audit-plus-break-test findings surfaced after `v0.1.3-alpha`
-(N1, N2, N3, N5, N6, N7, N8, F-DM-1, FN-LOG-1..4) and five
-`FLEET-STRONGHOLDS.md` patterns (§1.6 W3C traceparent
-propagation, §5.1 default security response headers, §8.2 doctor
-CLI subcommand, §11.2 env-safety posture gate, §11.3 dev-fixture
-DSL gate).
+**Current release** on `dev`: `v0.2.0-alpha` (published).
+Ships the h2ck.me v1 audit-plus-break-test findings surfaced
+after `v0.1.3-alpha` (N1, N2, N3, N5, N6, N7, N8, F-DM-1,
+FN-LOG-1..4) and five `FLEET-STRONGHOLDS.md` patterns (§1.6 W3C
+traceparent propagation, §5.1 default security response headers,
+§8.2 doctor CLI subcommand, §11.2 env-safety posture gate, §11.3
+dev-fixture DSL gate).
+
+**In progress on `dev`** (unreleased): the follow-up to the v1
+`NEXT-TASKS.md` backlog — T-13 structured 405 with `Allow`
+header (both `/:project/*view` and `/healthz`), T-18 graceful
+shutdown on `SIGTERM` / `SIGINT` / `SIGHUP`, T-3 regression pin
+proving nested-`#each` amplification is bounded by `CappedWriter`.
+See CHANGELOG.md `## [Unreleased]` for the wire-shape delta.
 
 **Previous release**: `v0.1.3-alpha` (2026-09-06).
 
@@ -36,8 +42,9 @@ human-authorised operation.
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast     # 155 passed / 0 failed on the rollup
-                              # (was 66 on v0.1.3-alpha)
+cargo test --no-fail-fast     # 163 passed / 0 failed on `dev`
+                              # (was 155 at v0.2.0-alpha,
+                              #  66 at v0.1.3-alpha)
 cargo audit --deny warnings
 ```
 
@@ -619,6 +626,8 @@ per-request telemetry into their aggregation pipeline.
 | R.10 | `src/config.rs` | `redact_serde_error` |
 | R.11 | `src/env_safety.rs` | `Environment`, `PostureCheck`, `DevFixtureAction` |
 | R.12 | `src/doctor.rs` + `src/main.rs` | `doctor::run`, clap `Cli` / `Command` |
+| R.13 (Unreleased) | `src/router.rs` | `method_not_allowed_on_render_route` — structured 405 + `Allow: POST` on the render route, `Allow: GET, HEAD` on healthz (T-13) |
+| R.14 (Unreleased) | `src/shutdown.rs` + `src/main.rs` | `shutdown::shutdown_signal` — SIGTERM / SIGINT / SIGHUP graceful drain via `axum::serve(...).with_graceful_shutdown(...)` (T-18) |
 
 Middleware order in `router.rs::build()` — OUTER-first is
 LAST-in-chain: `header_value_size_gate` → `access_log_middleware`

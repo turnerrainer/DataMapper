@@ -1313,3 +1313,252 @@ async fn n1_double_brace_template_still_gets_text_html_on_explicit_accept() {
         "unescaped script tag leaked: {body}"
     );
 }
+
+// ---------- T-13 — wrong method on POST route returns structured 405 ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-13: pre-fix, GET/PUT/DELETE against a
+// registered POST route (e.g. `/samples/echo`) fell through to
+// axum's default 405 with a bare-text "method not allowed" body.
+// The rest of DataMapper emits structured JSON on every failure
+// path; make wrong-method requests consistent so log aggregators
+// and clients don't need a special branch.
+
+#[tokio::test]
+async fn t13_get_on_post_route_returns_structured_405() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/samples/echo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("application/json"),
+        "expected JSON body on 405, got content-type: {ct}"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "MethodNotAllowed");
+}
+
+#[tokio::test]
+async fn t13_put_on_post_route_returns_structured_405() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .put(format!("{base}/samples/echo"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "MethodNotAllowed");
+}
+
+#[tokio::test]
+async fn t13_delete_on_post_route_returns_structured_405() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .delete(format!("{base}/samples/echo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "MethodNotAllowed");
+}
+
+#[tokio::test]
+async fn t13_allow_header_lists_post_on_405() {
+    // RFC 7231 §6.5.5 requires the Allow header on a 405 response
+    // so a well-behaved client (curl -X, retry libraries, RFC-
+    // aware HTTP proxies) can determine which methods are actually
+    // supported without a probe sweep.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/samples/echo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let allow = resp
+        .headers()
+        .get("allow")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        allow.contains("POST"),
+        "Allow header must list POST on the render route, got: {allow:?}"
+    );
+}
+
+// ---------- T-12 — pathological over-limit body returns structured 413 ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-12: `spawn_server(_, N, _)` reserves
+// `N + 4096` bytes for the DefaultBodyLimit layer. Requests up to
+// `N + 4096` produce a structured 413 from `invoke`; requests beyond
+// `N + 4096` used to hit axum's layer-level 413 with a bare-text body.
+// Verify the wire shape is JSON regardless of overshoot size.
+
+#[tokio::test]
+async fn t12_body_far_beyond_layer_limit_still_returns_structured_413() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    // 128-byte limit → layer sits at 4224. Send 32 KB → 8x the layer cap.
+    let base = spawn_server(tmp.path(), 128, 16 * 1024).await;
+    let client = reqwest::Client::new();
+
+    let big = format!(r#"{{"x":"{}"}}"#, "A".repeat(32 * 1024));
+    let resp = client
+        .post(format!("{base}/samples/echo"))
+        .header("content-type", "application/json")
+        .body(big)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("application/json"),
+        "expected JSON body on 413 for pathological upload, got: {ct}"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "RequestTooLarge");
+    assert_eq!(body["limit"], 128);
+}
+
+// ---------- T-3 remainder — nested-#each amplification is bounded ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-3 (partial). The full "iteration cap
+// with dedicated error code" is deferred (would require vendoring
+// handlebars-rust's private EachHelper internals — see feedback doc).
+// Existing defenses: F-DM-1 rejects giant single arrays before render;
+// CappedWriter aborts unbounded output mid-render; TimeoutLayer catches
+// pathological CPU spend on the empty-body edge case.
+//
+// This test exercises the primary attack lane an operator would face
+// in practice: a template with nested `#each` whose inner body emits
+// at least one byte per iteration. Ten thousand × ten thousand
+// iterations × 1 byte = 100 MB of would-be output. `CappedWriter`
+// must intercept the render before the response buffer crosses the
+// configured cap, and the response must be a structured 500
+// `ResponseTooLarge` — not a memory blow-up, not a bare-text error.
+
+#[tokio::test]
+async fn t3_nested_each_output_amplification_returns_response_too_large() {
+    let tmp = TempDir::new().unwrap();
+    // Inner body writes exactly one non-empty byte per iteration.
+    // `../items` scopes back to the outer context so the inner
+    // `#each` iterates the same array, not a field on the current
+    // element (which would be an integer scalar without `b`).
+    write_dsl(
+        tmp.path(),
+        "amp",
+        "nested_writeful",
+        "{{#each items}}{{#each ../items}}x{{/each}}{{/each}}",
+    );
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        // Cap at 64 KiB so the test can allocate at most that much.
+        max_response_bytes: 64 * 1024,
+        max_body_array_length: 10_000,
+        request_timeout_secs: 30,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Array at F-DM-1's cap → 10^8 total iterations of the inner
+    // body. Without CappedWriter this would allocate ~100 MB.
+    let items: Vec<i32> = (0..10_000).collect();
+    let body = json!({ "items": items });
+
+    let resp = client
+        .post(format!("{base}/amp/nested_writeful"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500);
+    let json: Value = resp.json().await.unwrap();
+    assert_eq!(json["error"], "ResponseTooLarge");
+    assert_eq!(json["limit"], 64 * 1024);
+}
+
+// ---------- T-18 — graceful shutdown drains in-flight requests ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-18. The unit-scope check: the
+// shutdown signal future is composable — calling `shutdown_signal()`
+// with a channel that never fires should not resolve. This is
+// a smoke test that the wiring exists at all; the full
+// SIGTERM-under-load behaviour is validated at container level.
+
+#[tokio::test]
+async fn t18_shutdown_signal_future_awaits_until_signalled() {
+    use tokio::sync::oneshot;
+    use tokio::time::{timeout, Duration};
+
+    let (_tx, rx) = oneshot::channel::<()>();
+    let fut = datamapper::shutdown::shutdown_from_channel(rx);
+    // 200ms window — the future must be pending, NOT resolved,
+    // because the channel hasn't been signalled and no OS signal
+    // has arrived.
+    let r = timeout(Duration::from_millis(200), fut).await;
+    assert!(
+        r.is_err(),
+        "shutdown_from_channel resolved without a signal being sent"
+    );
+}
+
+#[tokio::test]
+async fn t18_shutdown_signal_resolves_on_channel_send() {
+    use tokio::sync::oneshot;
+    use tokio::time::{timeout, Duration};
+
+    let (tx, rx) = oneshot::channel::<()>();
+    let fut = datamapper::shutdown::shutdown_from_channel(rx);
+    // Send the channel after a tick — the future must resolve.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tx.send(());
+    });
+    let r = timeout(Duration::from_secs(2), fut).await;
+    assert!(
+        r.is_ok(),
+        "shutdown_from_channel did not resolve after sender fired"
+    );
+}
