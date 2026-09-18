@@ -1413,3 +1413,46 @@ async fn t13_allow_header_lists_post_on_405() {
         "Allow header must list POST on the render route, got: {allow:?}"
     );
 }
+
+// ---------- T-18 — graceful shutdown drains in-flight requests ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-18. Unit-scope: the shutdown-signal
+// future is composable — calling `shutdown_from_channel` with a
+// channel that never fires must NOT resolve. Full SIGTERM-under-load
+// behaviour is validated at container level per the PR's smoke plan.
+
+#[tokio::test]
+async fn t18_shutdown_signal_future_awaits_until_signalled() {
+    use tokio::sync::oneshot;
+    use tokio::time::{timeout, Duration};
+
+    let (_tx, rx) = oneshot::channel::<()>();
+    let fut = datamapper::shutdown::shutdown_from_channel(rx);
+    // 200ms window — the future must be pending, NOT resolved,
+    // because the channel hasn't been signalled and no OS signal
+    // has arrived.
+    let r = timeout(Duration::from_millis(200), fut).await;
+    assert!(
+        r.is_err(),
+        "shutdown_from_channel resolved without a signal being sent"
+    );
+}
+
+#[tokio::test]
+async fn t18_shutdown_signal_resolves_on_channel_send() {
+    use tokio::sync::oneshot;
+    use tokio::time::{timeout, Duration};
+
+    let (tx, rx) = oneshot::channel::<()>();
+    let fut = datamapper::shutdown::shutdown_from_channel(rx);
+    // Send the channel after a tick — the future must resolve.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tx.send(());
+    });
+    let r = timeout(Duration::from_secs(2), fut).await;
+    assert!(
+        r.is_ok(),
+        "shutdown_from_channel did not resolve after sender fired"
+    );
+}

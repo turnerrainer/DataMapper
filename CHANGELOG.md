@@ -26,10 +26,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#24](https://github.com/turnerrainer/DataMapper/issues/24);
   h2ck.me v1 NEXT-TASKS.md §T-13.
 
+### Added
+
+- **Graceful shutdown on `SIGTERM` / `SIGINT` / `SIGHUP`** — the
+  process now honours orchestrator stop signals through
+  `axum::serve(...).with_graceful_shutdown(...)`. New connections
+  are refused after the first signal; in-flight requests get up
+  to `request_timeout_secs` to finish before the process exits.
+  Combined with the existing `TimeoutLayer` this bounds the
+  drain window to `limits.request_timeout_secs` (30 s default).
+  On non-Unix targets only Ctrl-C is wired. Closes
+  [#25](https://github.com/turnerrainer/DataMapper/issues/25);
+  h2ck.me v1 NEXT-TASKS.md §T-18.
+
 ### Test coverage
 
 - +4 integration tests (structured 405 for GET/PUT/DELETE +
-  `Allow: POST` header assertion) — brings the suite to 159.
+  `Allow: POST` header assertion), +2 integration tests
+  exercising the shutdown-signal composition via
+  `shutdown::shutdown_from_channel` — brings the suite to 161.
 
 ## [0.2.0-alpha] - 2026-09-16
 
