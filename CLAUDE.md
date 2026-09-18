@@ -5,25 +5,39 @@ DataMapper's public-facing docs describe what the product does, and
 this file describes what a code-writing agent needs to know to not
 break it.
 
-**Current release** on `dev`: `v0.2.0-alpha` (release-prep in
-progress; PR open against `dev`). Ships the h2ck.me v1
-audit-plus-break-test findings surfaced after `v0.1.3-alpha`
-(N1, N2, N3, N5, N6, N7, N8, F-DM-1, FN-LOG-1..4) and five
-`FLEET-STRONGHOLDS.md` patterns (§1.6 W3C traceparent
+**Current release** on `dev`: `v0.2.1-alpha` (2026-09-18).
+Follow-up patch closing the residual h2ck.me v1 `NEXT-TASKS.md`
+backlog: T-13 structured 405 with `Allow` header (both
+`/:project/*view` and `/healthz`), T-18 graceful shutdown on
+`SIGTERM` / `SIGINT` / `SIGHUP`, plus T-12 and T-3 regression
+pins.
+
+**Previous release**: `v0.2.0-alpha` (2026-09-16) — rolled up
+the h2ck.me v1 audit-plus-break-test findings surfaced after
+`v0.1.3-alpha` (N1, N2, N3, N5, N6, N7, N8, F-DM-1, FN-LOG-1..4)
+and five `FLEET-STRONGHOLDS.md` patterns (§1.6 W3C traceparent
 propagation, §5.1 default security response headers, §8.2 doctor
 CLI subcommand, §11.2 env-safety posture gate, §11.3 dev-fixture
 DSL gate).
 
-**Previous release**: `v0.1.3-alpha` (2026-09-06).
+**Semver bump rationale (v0.2.0-alpha → v0.2.1-alpha)**: the
+0.2.1 contains one wire-shape delta (T-13 structured 405 body +
+`Allow` header) plus one feature addition (T-18 graceful
+shutdown) and two regression tests. The 405 breakage affects
+only callers keying on axum's default bare-text 405, which is
+unusual — every other DataMapper failure path has emitted
+structured JSON since `v0.1.3-alpha`. Patch-level bump is
+defensible; strict 0.x semver would read minor. Callers
+upgrading should audit their wrong-method 405 handling regardless.
 
-**Semver bump rationale**: the release contains multiple
-client-observable wire-shape changes (new status codes 408 / 413
-/ 431, unified 404 JSON shape, five new default response headers,
-`traceparent` + `x-trace-id` on every response, CLI grew
-subcommands). Under 0.x semver, minor is de-facto major, so the
-0.1.3 → 0.2.0 bump signals "review your caller before upgrade."
-See "Upgrading from v0.1.3-alpha to v0.2.0-alpha" below for
-step-by-step client-side and operator-side migration.
+**Semver bump rationale (v0.1.3 → v0.2.0)**: the release
+contained multiple client-observable wire-shape changes (new
+status codes 408 / 413 / 431, unified 404 JSON shape, five new
+default response headers, `traceparent` + `x-trace-id` on every
+response, CLI grew subcommands). Under 0.x semver, minor is
+de-facto major, so the 0.1.3 → 0.2.0 bump signalled "review
+your caller before upgrade." See "Upgrading from v0.1.3-alpha
+to v0.2.0-alpha" below for step-by-step migration.
 
 **Trunk**: `dev`. There is no `main` branch on origin; releases
 tag off `dev` after review. **Never push `main` and never bump
