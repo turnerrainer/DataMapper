@@ -24,7 +24,7 @@ use crate::error::DataMapperError;
 use crate::renderer::Renderer;
 use axum::body::to_bytes;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, post};
@@ -88,6 +88,13 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/:project/*view",
             post(invoke)
+                // h2ck.me v1 T-13 — return structured 405 (with an
+                // `Allow: POST` header per RFC 7231 §6.5.5) on any
+                // non-POST verb against the render route. Pre-fix
+                // this fell through to axum's default 405 with a
+                // bare-text body, inconsistent with every other
+                // failure path in the service.
+                .fallback(method_not_allowed_on_render_route)
                 // Give axum's default-body-limit a small headroom
                 // above our authoritative check so the framework's
                 // hard 413 fires only on pathological uploads; the
@@ -133,9 +140,32 @@ pub fn build(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Method fallback for the `/:project/*view` render route.
+///
+/// Runs when axum's `MethodRouter` matched the path but no method
+/// arm accepted the verb (i.e. the request wasn't `POST`). Emits
+/// the standard structured error body plus `Allow: POST` per
+/// RFC 7231 §6.5.5 so RFC-aware clients can recover without a
+/// probe sweep. Never touches the request body — we're rejecting
+/// before extraction to keep the failure path allocation-cheap.
+///
+/// h2ck.me v1 NEXT-TASKS.md §T-13.
+async fn method_not_allowed_on_render_route() -> Response {
+    let mut resp = DataMapperError::MethodNotAllowed.into_response();
+    resp.headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("POST"));
+    resp
+}
+
 async fn healthz(method: axum::http::Method) -> Response {
     if method != axum::http::Method::GET && method != axum::http::Method::HEAD {
-        return DataMapperError::MethodNotAllowed.into_response();
+        // h2ck.me v1 T-13 — annotate the 405 with `Allow: GET, HEAD`
+        // per RFC 7231 §6.5.5 so RFC-aware clients don't need to
+        // probe-sweep to discover the supported methods.
+        let mut resp = DataMapperError::MethodNotAllowed.into_response();
+        resp.headers_mut()
+            .insert(header::ALLOW, HeaderValue::from_static("GET, HEAD"));
+        return resp;
     }
     let body = json!({
         "service": "DataMapper",

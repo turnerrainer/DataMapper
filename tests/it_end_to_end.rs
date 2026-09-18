@@ -1313,3 +1313,103 @@ async fn n1_double_brace_template_still_gets_text_html_on_explicit_accept() {
         "unescaped script tag leaked: {body}"
     );
 }
+
+// ---------- T-13 — wrong method on POST route returns structured 405 ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-13: pre-fix, GET/PUT/DELETE against a
+// registered POST route (e.g. `/samples/echo`) fell through to
+// axum's default 405 with a bare-text "method not allowed" body.
+// The rest of DataMapper emits structured JSON on every failure
+// path; make wrong-method requests consistent so log aggregators
+// and clients don't need a special branch.
+
+#[tokio::test]
+async fn t13_get_on_post_route_returns_structured_405() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/samples/echo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("application/json"),
+        "expected JSON body on 405, got content-type: {ct}"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "MethodNotAllowed");
+}
+
+#[tokio::test]
+async fn t13_put_on_post_route_returns_structured_405() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .put(format!("{base}/samples/echo"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "MethodNotAllowed");
+}
+
+#[tokio::test]
+async fn t13_delete_on_post_route_returns_structured_405() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .delete(format!("{base}/samples/echo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "MethodNotAllowed");
+}
+
+#[tokio::test]
+async fn t13_allow_header_lists_post_on_405() {
+    // RFC 7231 §6.5.5 requires the Allow header on a 405 response
+    // so a well-behaved client (curl -X, retry libraries, RFC-
+    // aware HTTP proxies) can determine which methods are actually
+    // supported without a probe sweep.
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    let base = spawn_default(tmp.path()).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/samples/echo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    let allow = resp
+        .headers()
+        .get("allow")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        allow.contains("POST"),
+        "Allow header must list POST on the render route, got: {allow:?}"
+    );
+}
