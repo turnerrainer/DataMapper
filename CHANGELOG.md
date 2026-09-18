@@ -409,7 +409,8 @@ port zero-touch. Full porting summary in
   004 (JSON-schema validation), 005 (helper expansion) filed.
 - 24 unit + 16 integration tests, all green.
 
-[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.2.0-alpha...HEAD
+[Unreleased]: https://github.com/turnerrainer/datamapper/compare/v0.2.1-alpha...HEAD
+[0.2.1-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.2.1-alpha
 [0.2.0-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.2.0-alpha
 [0.1.3-alpha]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.3-alpha
 [0.1.0-alpha.2]: https://github.com/turnerrainer/datamapper/releases/tag/v0.1.0-alpha.2
