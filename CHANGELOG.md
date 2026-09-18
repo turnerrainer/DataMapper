@@ -44,7 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - +4 integration tests (structured 405 for GET/PUT/DELETE +
   `Allow: POST` header assertion), +2 integration tests
   exercising the shutdown-signal composition via
-  `shutdown::shutdown_from_channel` — brings the suite to 161.
+  `shutdown::shutdown_from_channel`, +1 regression pin for
+  h2ck.me v1 T-12 (32 KiB body against a 128-byte cap → structured
+  JSON 413, not axum's theoretical bare-text 413) — brings the
+  suite to 162. T-12 defense was already in place;
+  [#26](https://github.com/turnerrainer/DataMapper/issues/26)
+  adds the wire-shape pin.
 
 ## [0.2.0-alpha] - 2026-09-16
 

@@ -1314,6 +1314,48 @@ async fn n1_double_brace_template_still_gets_text_html_on_explicit_accept() {
     );
 }
 
+// ---------- T-12 — pathological over-limit body returns structured 413 ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-12: `spawn_server(_, N, _)` reserves
+// `N + 4096` bytes for the DefaultBodyLimit layer. Requests up to
+// `N + 4096` produce a structured 413 from `invoke`; requests beyond
+// `N + 4096` were theorised to hit axum's layer-level 413 with a
+// bare-text body. Empirically the layer's cap never fires because
+// `to_bytes(_, N)` rejects at the tighter explicit limit first — pin
+// that invariant so a future refactor cannot regress the wire shape.
+
+#[tokio::test]
+async fn t12_body_far_beyond_layer_limit_still_returns_structured_413() {
+    let tmp = TempDir::new().unwrap();
+    write_dsl(tmp.path(), "samples", "echo", "{{{json this}}}");
+    // 128-byte limit → layer sits at 4224. Send 32 KB → 8x the layer cap.
+    let base = spawn_server(tmp.path(), 128, 16 * 1024).await;
+    let client = reqwest::Client::new();
+
+    let big = format!(r#"{{"x":"{}"}}"#, "A".repeat(32 * 1024));
+    let resp = client
+        .post(format!("{base}/samples/echo"))
+        .header("content-type", "application/json")
+        .body(big)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        ct.starts_with("application/json"),
+        "expected JSON body on 413 for pathological upload, got: {ct}"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "RequestTooLarge");
+    assert_eq!(body["limit"], 128);
+}
+
 // ---------- T-13 — wrong method on POST route returns structured 405 ----------
 //
 // h2ck.me v1 NEXT-TASKS.md §T-13: pre-fix, GET/PUT/DELETE against a
