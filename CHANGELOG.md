@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`405 Method Not Allowed` on the render route is now structured
+  JSON** — a `GET` / `PUT` / `DELETE` against `/:project/*view`
+  used to fall through to axum's default 405 with a bare-text
+  body. It now returns the standard DataMapper error shape:
+  ```json
+  {"error": "MethodNotAllowed", "message": "method not allowed on this route"}
+  ```
+  plus an `Allow: POST` response header per RFC 7231 §6.5.5. The
+  same shape now also carries `Allow: GET, HEAD` on the `/healthz`
+  and `/health` aliases when hit with a non-GET / non-HEAD verb
+  (previously the JSON body was already structured; the `Allow`
+  header is new). Callers that key on `resp.text() == ""` for
+  wrong-method requests break — treat the body as JSON with an
+  `error` field. Closes
+  [#24](https://github.com/turnerrainer/DataMapper/issues/24);
+  h2ck.me v1 NEXT-TASKS.md §T-13.
+
+### Test coverage
+
+- +4 integration tests (structured 405 for GET/PUT/DELETE +
+  `Allow: POST` header assertion) — brings the suite to 159.
+
 ## [0.2.0-alpha] - 2026-09-16
 
 Security-hardening + observability release. Closes every h2ck.me
