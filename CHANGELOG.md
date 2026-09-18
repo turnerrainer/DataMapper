@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1-alpha] - 2026-09-18
+
+Follow-up patch closing the residual h2ck.me v1 `NEXT-TASKS.md`
+backlog after `v0.2.0-alpha`. Four issues, four PRs, one merge
+each (per-issue delivery rather than a batched rollup):
+
+- [#28](https://github.com/turnerrainer/DataMapper/pull/28) → closes [#24](https://github.com/turnerrainer/DataMapper/issues/24) — T-13 structured 405 + `Allow` header.
+- [#29](https://github.com/turnerrainer/DataMapper/pull/29) → closes [#25](https://github.com/turnerrainer/DataMapper/issues/25) — T-18 graceful shutdown on SIGTERM/SIGINT/SIGHUP.
+- [#30](https://github.com/turnerrainer/DataMapper/pull/30) → closes [#26](https://github.com/turnerrainer/DataMapper/issues/26) — T-12 structured-413 regression pin.
+- [#31](https://github.com/turnerrainer/DataMapper/pull/31) → closes [#27](https://github.com/turnerrainer/DataMapper/issues/27) — T-3 nested-`#each` CappedWriter regression pin.
+
+Version chosen as `0.2.1-alpha` (patch level) rather than
+`0.3.0-alpha`: the wire-shape delta (T-13) affects only callers
+that keyed on axum's default bare-text 405 body — an unusual
+pattern given every other DataMapper failure path has emitted
+structured JSON since v0.1.3-alpha. Full defensiveness reads
+"minor bump" under 0.x, but the practical caller-observable
+delta is narrow enough for a patch bump. Callers upgrading
+from `v0.2.0-alpha` should still audit their wrong-method 405
+handling (see the Breaking section below).
+
 ### Breaking
 
 - **`405 Method Not Allowed` on the render route is now structured
