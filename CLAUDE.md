@@ -36,7 +36,7 @@ human-authorised operation.
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast     # 159 passed / 0 failed on `dev`
+cargo test --no-fail-fast     # 161 passed / 0 failed on `dev`
                               # (was 155 at v0.2.0-alpha,
                               #  66 at v0.1.3-alpha)
 cargo audit --deny warnings
@@ -621,6 +621,7 @@ per-request telemetry into their aggregation pipeline.
 | R.11 | `src/env_safety.rs` | `Environment`, `PostureCheck`, `DevFixtureAction` |
 | R.12 | `src/doctor.rs` + `src/main.rs` | `doctor::run`, clap `Cli` / `Command` |
 | R.13 (Unreleased) | `src/router.rs` | `method_not_allowed_on_render_route` — structured 405 + `Allow: POST` on the render route, `Allow: GET, HEAD` on healthz (T-13) |
+| R.14 (Unreleased) | `src/shutdown.rs` + `src/main.rs` | `shutdown::shutdown_signal` — SIGTERM / SIGINT / SIGHUP graceful drain via `axum::serve(...).with_graceful_shutdown(...)` (T-18) |
 
 Middleware order in `router.rs::build()` — OUTER-first is
 LAST-in-chain: `header_value_size_gate` → `access_log_middleware`
