@@ -46,10 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exercising the shutdown-signal composition via
   `shutdown::shutdown_from_channel`, +1 regression pin for
   h2ck.me v1 T-12 (32 KiB body against a 128-byte cap → structured
-  JSON 413, not axum's theoretical bare-text 413) — brings the
-  suite to 162. T-12 defense was already in place;
-  [#26](https://github.com/turnerrainer/DataMapper/issues/26)
-  adds the wire-shape pin.
+  JSON 413, not axum's theoretical bare-text 413), +1 regression
+  pin for h2ck.me v1 T-3 partial (nested `#each` with 10 000-element
+  array → 10^8 iterations bounded by `CappedWriter` at 64 KiB,
+  structured 500 `ResponseTooLarge`) — brings the suite to 163.
+  T-12 and T-3 defenses were already in place; issues
+  [#26](https://github.com/turnerrainer/DataMapper/issues/26) and
+  [#27](https://github.com/turnerrainer/DataMapper/issues/27) add
+  the wire-shape pins. Full T-3 iteration-cap error code
+  deferred per issue #27 justification (vendoring handlebars-rust's
+  private `EachHelper` internals would break `@index` compat on
+  shipped DSLs).
 
 ## [0.2.0-alpha] - 2026-09-16
 

@@ -36,7 +36,7 @@ human-authorised operation.
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast     # 162 passed / 0 failed on `dev`
+cargo test --no-fail-fast     # 163 passed / 0 failed on `dev`
                               # (was 155 at v0.2.0-alpha,
                               #  66 at v0.1.3-alpha)
 cargo audit --deny warnings
