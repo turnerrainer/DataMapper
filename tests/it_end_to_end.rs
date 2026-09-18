@@ -1498,3 +1498,63 @@ async fn t18_shutdown_signal_resolves_on_channel_send() {
         "shutdown_from_channel did not resolve after sender fired"
     );
 }
+
+// ---------- T-3 (regression) — nested-#each amplification bounded by CappedWriter ----------
+//
+// h2ck.me v1 NEXT-TASKS.md §T-3 (partial). The full "iteration cap
+// with dedicated error code" is deferred (would require vendoring
+// handlebars-rust's private EachHelper internals). This test exercises
+// the primary attack lane an operator would face: a template with
+// nested `#each` whose inner body emits at least one byte per
+// iteration. Ten thousand × ten thousand iterations × 1 byte = 100 MB
+// of would-be output. `CappedWriter` must intercept the render before
+// the response buffer crosses the configured cap, and the response
+// must be a structured 500 `ResponseTooLarge` — not a memory blow-up.
+
+#[tokio::test]
+async fn t3_nested_each_output_amplification_returns_response_too_large() {
+    let tmp = TempDir::new().unwrap();
+    // Inner body writes exactly one non-empty byte per iteration.
+    // `../items` scopes back to the outer context so the inner
+    // `#each` iterates the same array, not a field on the current
+    // element (which would be an integer scalar without `b`).
+    write_dsl(
+        tmp.path(),
+        "amp",
+        "nested_writeful",
+        "{{#each items}}{{#each ../items}}x{{/each}}{{/each}}",
+    );
+    let state = AppState {
+        renderer: Arc::new(Renderer::new(tmp.path().to_path_buf())),
+        max_request_bytes: 2 * 1024 * 1024,
+        // Cap at 64 KiB so the test can allocate at most that much.
+        max_response_bytes: 64 * 1024,
+        max_body_array_length: 10_000,
+        request_timeout_secs: 30,
+    };
+    let app = router::build(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // Array at F-DM-1's cap → 10^8 total iterations of the inner
+    // body. Without CappedWriter this would allocate ~100 MB.
+    let items: Vec<i32> = (0..10_000).collect();
+    let body = json!({ "items": items });
+
+    let resp = client
+        .post(format!("{base}/amp/nested_writeful"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500);
+    let json: Value = resp.json().await.unwrap();
+    assert_eq!(json["error"], "ResponseTooLarge");
+    assert_eq!(json["limit"], 64 * 1024);
+}
