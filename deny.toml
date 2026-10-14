@@ -23,7 +23,15 @@ no-default-features = false
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # RUSTSEC-2024-0449 — `unsafe-libyaml 0.2.11` unmaintained.
+    # Transitive via `serde_yaml_ng`; no safe upgrade exists.
+    # DataMapper parses YAML only at boot from the operator-
+    # controlled config file (never from request input). See
+    # `.cargo/audit.toml` for the full rationale.
+    # Review by: 2027-01-15
+    "RUSTSEC-2024-0449",
+]
 
 [licenses]
 version = 2
