@@ -10,4 +10,23 @@
 # this file. See STANDARDS.md §5.
 
 [advisories]
-ignore = []
+ignore = [
+    # RUSTSEC-2024-0449 — `unsafe-libyaml 0.2.11` is unmaintained
+    # (archived 2024-03-25). Pulled in transitively via
+    # `serde_yaml_ng` → `unsafe-libyaml`; no safe upgrade is
+    # available in the serde-yaml fork ecosystem.
+    #
+    # Risk assessment: DataMapper parses YAML exclusively at boot
+    # from the operator-controlled `datamapper.yaml` file (never
+    # from HTTP request input, never from DSL templates). The
+    # attack surface for a YAML parser bug is a maintainer who
+    # has write access to the config file — which is already game
+    # over. The advisory is `unmaintained` (no known CVE), not an
+    # active vulnerability.
+    #
+    # Follow-up: evaluate migration to `serde-saphyr` (safe-Rust
+    # YAML parser) during the next dependency sweep.
+    #
+    # Review by: 2027-01-15
+    "RUSTSEC-2024-0449",
+]
