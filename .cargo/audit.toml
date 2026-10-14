@@ -24,8 +24,17 @@ ignore = [
     # over. The advisory is `unmaintained` (no known CVE), not an
     # active vulnerability.
     #
-    # Follow-up: evaluate migration to `serde-saphyr` (safe-Rust
-    # YAML parser) during the next dependency sweep.
+    # Evaluated 2026-10-14 — the obvious candidate replacement
+    # `serde-saphyr 2.0.0` is NOT a drop-in: it re-opens the
+    # h2ck.me N7 secret-leak lane. The current
+    # `redact_serde_error` strips the `"..."` excerpt format that
+    # `serde_yaml_ng` uses to echo the offending value; saphyr
+    # inlines offending content between `|` characters AND emits
+    # multiple context lines, so the existing redactor misses it
+    # and the leak scope actually widens. Any future migration
+    # must rewrite `redact_serde_error` + the three
+    # `config::tests::n7_*` tests against the new parser's error
+    # format before switching.
     #
     # Review by: 2027-01-15
     "RUSTSEC-2024-0449",
