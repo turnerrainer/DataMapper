@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Bumped `rustls-webpki` 0.103.15 → 0.103.16 for
+  [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382)
+  (certificate verification may accept distrusted intermediates).
+- Bumped `webpki-roots` 1.0.9 → 1.0.10 for
+  [RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381)
+  (bundled root certificates allow trust in distrusted emSign
+  intermediates). Both crates are reachable from DataMapper only
+  as dev-dependencies (via `reqwest` in the test suite); no
+  production code path exercises them. Lockfile-only bumps —
+  `Cargo.toml` unchanged.
+
 ## [0.2.1-alpha] - 2026-09-18
 
 Follow-up patch closing the residual h2ck.me v1 `NEXT-TASKS.md`
