@@ -17,4 +17,5 @@ pub mod renderer;
 pub mod router;
 pub mod security_headers;
 pub mod shutdown;
+pub mod timefmt;
 pub mod traceparent;

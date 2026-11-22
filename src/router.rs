@@ -170,7 +170,7 @@ async fn healthz(method: axum::http::Method) -> Response {
     let body = json!({
         "service": "DataMapper",
         "ok": true,
-        "ts": chrono::Utc::now().to_rfc3339(),
+        "ts": crate::timefmt::now_rfc3339(),
     });
     (StatusCode::OK, axum::Json(body)).into_response()
 }

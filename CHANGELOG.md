@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Removed the `chrono` dependency for
+  [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)
+  (`chrono` unmaintained, all versions affected, no patched
+  release). `{{now}}` and `/healthz` `ts` now use a std-only
+  formatter (`src/timefmt.rs`) whose output is identical to
+  `chrono::Utc::now().to_rfc3339()` (`+00:00` suffix, 0/3/6/9
+  fractional digits). No wire-format change.
 - Bumped `rustls-webpki` 0.103.15 → 0.103.16 for
   [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382)
   (certificate verification may accept distrusted intermediates).

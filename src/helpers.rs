@@ -27,7 +27,7 @@ fn now_helper(
     _: &mut RenderContext<'_, '_>,
     out: &mut dyn Output,
 ) -> HelperResult {
-    out.write(&chrono::Utc::now().to_rfc3339())?;
+    out.write(&crate::timefmt::now_rfc3339())?;
     Ok(())
 }
 

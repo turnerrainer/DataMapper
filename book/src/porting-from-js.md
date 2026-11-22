@@ -135,7 +135,7 @@ remove those references.
 JS: `new Date().toISOString()` → `2026-08-05T12:34:56.789Z` (`Z`
 suffix, millisecond precision).
 
-Rust: `chrono::Utc::now().to_rfc3339()` →
+Rust: `timefmt::now_rfc3339()` (std-only, chrono-compatible) →
 `2026-08-05T12:34:56.123456789+00:00` (`+00:00` suffix, nanosecond
 precision).
 
