@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Bumped `url` 2.5.8 → 2.5.9 (and `form_urlencoded` 1.2.2 → 1.2.3)
+  for [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592)
+  (stack overflow in `Url::origin()` on nested `blob:` URLs).
+  DataMapper does not call `Url::origin()` on request input; `url`
+  is reached via `tower-http` and, for tests, `reqwest`.
+  Lockfile-only; `Cargo.toml` unchanged.
 - Removed the `chrono` dependency for
   [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)
   (`chrono` unmaintained, all versions affected, no patched
